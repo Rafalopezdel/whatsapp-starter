@@ -1,0 +1,41 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Las Firebase Cloud Functions tienen acceso automático completo usando Admin SDK
+    //
+    // DASHBOARD WEB: Acceso de lectura en tiempo real para usuarios autenticados
+    // - sessions: Sesiones de usuario (lectura para dashboard)
+    // - open-handoffs: Relevos activos (lectura para dashboard)
+    //
+    // SEGURIDAD: Las escrituras se hacen SOLO vía HTTP endpoints del backend
+    // para garantizar validación y autorización adecuada
+
+    // Función helper para verificar autenticación
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Sessions: Lectura permitida para usuarios autenticados (dashboard)
+    match /sessions/{sessionId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Solo Cloud Functions pueden escribir
+    }
+
+    // Open handoffs: Lectura permitida para usuarios autenticados (dashboard)
+    match /open-handoffs/{handoffId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Solo Cloud Functions pueden escribir
+    }
+
+    // Tenant config: Solo Cloud Functions (Admin SDK)
+    match /tenant_config/{document} {
+      allow read, write: if false;
+    }
+
+    // Cualquier otra colección: Bloqueada
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

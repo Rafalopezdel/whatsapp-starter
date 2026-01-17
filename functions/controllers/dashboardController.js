@@ -1,0 +1,279 @@
+const { getActiveSessions, getSessionById } = require('../services/dashboardService');
+const { createHandoff, closeHandoff, getActiveHandoffByClient } = require('../services/handoffService');
+const { getAgentPhoneNumber } = require('../services/configService');
+const whatsappService = require('../services/whatsappService');
+const conversationLogService = require('../services/conversationLogService');
+const logger = require('../utils/logger');
+
+/**
+ * Dashboard Controller
+ * Handles HTTP endpoints for the web dashboard interface
+ */
+
+/**
+ * GET /api/dashboard/sessions
+ * Returns all active chat sessions for the dashboard
+ */
+async function getActiveChatSessions(req, res) {
+  try {
+    console.log('📊 Dashboard: Getting active sessions...');
+
+    const sessions = await getActiveSessions();
+
+    console.log(`✅ Dashboard: Found ${sessions.length} active sessions`);
+
+    return res.status(200).json({
+      success: true,
+      sessions: sessions,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Dashboard: Error getting sessions:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al obtener sesiones activas',
+      details: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/dashboard/session/:sessionId
+ * Returns a specific session with full conversation history
+ */
+async function getSessionDetails(req, res) {
+  try {
+    const { sessionId } = req.params;
+
+    console.log(`📊 Dashboard: Getting session details for ${sessionId}...`);
+
+    const session = await getSessionById(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Sesión no encontrada'
+      });
+    }
+
+    console.log(`✅ Dashboard: Session found for ${sessionId}`);
+
+    return res.status(200).json({
+      success: true,
+      session: session,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Dashboard: Error getting session details:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al obtener detalles de sesión',
+      details: error.message
+    });
+  }
+}
+
+/**
+ * POST /api/dashboard/send-message
+ * Sends a message from the web dashboard to a WhatsApp user
+ * Body: { to: "573001234567", message: "Hola desde el dashboard" }
+ */
+async function sendMessageFromDashboard(req, res) {
+  try {
+    const { to, message } = req.body;
+
+    if (!to || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Se requieren los campos "to" y "message"'
+      });
+    }
+
+    console.log(`📤 Dashboard: Sending message to ${to}...`);
+
+    // Get agent phone number for logging
+    const agentPhoneNumber = await getAgentPhoneNumber();
+
+    // Send message via WhatsApp
+    await whatsappService.sendMessage(to, message);
+
+    // Log message to conversations.json with role='agent'
+    await conversationLogService.logSimpleMessage(
+      to,
+      'agent',
+      message,
+      null, // userDocument might not be available yet
+      null  // userName might not be available yet
+    );
+
+    console.log(`✅ Dashboard: Message sent successfully to ${to}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Mensaje enviado correctamente',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Dashboard: Error sending message:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al enviar mensaje',
+      details: error.message
+    });
+  }
+}
+
+/**
+ * POST /api/dashboard/intervene
+ * Starts agent intervention (handoff) for a specific chat
+ * Body: { clientId: "573001234567", clientName: "Juan Pérez" }
+ */
+async function startIntervention(req, res) {
+  try {
+    const { clientId, clientName } = req.body;
+
+    if (!clientId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Se requiere el campo "clientId"'
+      });
+    }
+
+    console.log(`🤝 Dashboard: Starting intervention for ${clientId}...`);
+
+    // Check if there's already an active handoff
+    const existingHandoff = await getActiveHandoffByClient(clientId);
+    if (existingHandoff) {
+      return res.status(400).json({
+        success: false,
+        error: 'Ya existe una intervención activa para este cliente'
+      });
+    }
+
+    // Get agent phone number from config
+    const agentPhoneNumber = await getAgentPhoneNumber();
+
+    if (!agentPhoneNumber) {
+      return res.status(500).json({
+        success: false,
+        error: 'No se ha configurado el número del agente en tenant_config'
+      });
+    }
+
+    // Create handoff (this will send notification to agent via WhatsApp)
+    const handoff = await createHandoff(
+      clientId,
+      agentPhoneNumber,
+      clientName || 'Cliente'
+    );
+
+    console.log(`✅ Dashboard: Intervention started for ${clientId}`);
+
+    // Send notification to client that agent is now handling the chat
+    await whatsappService.sendMessage(
+      clientId,
+      '👤 Un agente se ha unido a la conversación y te atenderá personalmente.'
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Intervención iniciada correctamente',
+      handoff: handoff,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Dashboard: Error starting intervention:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al iniciar intervención',
+      details: error.message
+    });
+  }
+}
+
+/**
+ * POST /api/dashboard/close-intervention
+ * Closes agent intervention (handoff) for a specific chat
+ * Body: { clientId: "573001234567" }
+ */
+async function closeIntervention(req, res) {
+  try {
+    const { clientId } = req.body;
+
+    if (!clientId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Se requiere el campo "clientId"'
+      });
+    }
+
+    console.log(`🔚 Dashboard: Closing intervention for ${clientId}...`);
+
+    // Get active handoff
+    const handoff = await getActiveHandoffByClient(clientId);
+
+    if (!handoff) {
+      return res.status(404).json({
+        success: false,
+        error: 'No existe una intervención activa para este cliente'
+      });
+    }
+
+    // Close handoff
+    await closeHandoff(handoff.id);
+
+    console.log(`✅ Dashboard: Intervention closed for ${clientId}`);
+
+    // Send notification to client that bot is back
+    await whatsappService.sendMessage(
+      clientId,
+      '🤖 Paola ha vuelto a atenderte. ¿En qué más puedo ayudarte?'
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Intervención cerrada correctamente',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Dashboard: Error closing intervention:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al cerrar intervención',
+      details: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/dashboard/health
+ * Health check endpoint for dashboard services
+ */
+async function healthCheck(req, res) {
+  try {
+    return res.status(200).json({
+      success: true,
+      message: 'Dashboard API is running',
+      timestamp: new Date().toISOString(),
+      services: {
+        sessions: 'ok',
+        handoffs: 'ok',
+        whatsapp: 'ok'
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}
+
+module.exports = {
+  getActiveChatSessions,
+  getSessionDetails,
+  sendMessageFromDashboard,
+  startIntervention,
+  closeIntervention,
+  healthCheck
+};

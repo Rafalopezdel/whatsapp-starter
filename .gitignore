@@ -1,0 +1,104 @@
+# Dependencies
+node_modules/
+
+# Environment variables (NEVER commit these)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+database-debug.log
+pubsub-debug.log
+storage-debug.log
+*-debug.log
+
+# Logs
+logs/
+logs.txt
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/
+.cache/
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ===== PROJECT SPECIFIC =====
+
+# Internal documentation (keep only README.md)
+CLAUDE.md
+APPOINTMENT_MANAGEMENT_FIX.md
+CONVERSATION_LOGGING.md
+DASHBOARD_IMPLEMENTATION.md
+DEPLOYMENT.md
+DEPLOY_DASHBOARD.md
+FIREBASE_STORAGE_SETUP.md
+GOOGLE_DOCS_INTEGRATION.md
+HANDOFF_SYSTEM.md
+MIGRATION-SUMMARY.md
+PERFORMANCE_DIAGNOSTICS.md
+PERFORMANCE_OPTIMIZATION.md
+PERSISTENT_MEMORY.md
+QUICKSTART.md
+QUICK_OPTIMIZATIONS.md
+QUICK_START.md
+REPORTE_OPTIMIZACION_TOKENS.md
+TESTING.md
+TESTING_STRATEGY.md
+WHATSAPP_META_SETUP.md
+setup-environments.md
+
+# Test and utility scripts
+test-*.js
+testCreateAppointment.js
+verify-*.js
+export-for-ia.js
+get-firebase-config.js
+get-project-info.js
+setup-agent-config.js
+ia_payload.json
+
+# Deploy scripts (keep deployment local)
+deploy-*.sh
+deploy-*.ps1
+
+# Duplicate folders in root (real code is in functions/)
+/controllers/
+/services/
+/middleware/
+/rag/
+/utils/
+/server.js
+
+# Package files in root (not needed, functions/ has its own)
+/package.json
+/package-lock.json
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
