@@ -11,6 +11,7 @@ Un chatbot de WhatsApp listo para producción para clínicas dentales que integr
 - **Transferencia a Humano**: Transferencia fluida a agentes humanos cuando es necesario
 - **Dashboard para Agentes**: Panel web para gestionar conversaciones e intervenciones
 - **Buffering Inteligente**: Maneja mensajes rápidos secuenciales con agrupación inteligente
+- **Recordatorios de Citas**: Envío automático de recordatorios vía WhatsApp un día antes de la cita con botones de confirmación/cancelación
 
 ## Arquitectura
 
@@ -50,6 +51,8 @@ Un chatbot de WhatsApp listo para producción para clínicas dentales que integr
 │   │   ├── routerService.js       # Enrutamiento IA y ejecución de tools
 │   │   ├── sessionService.js      # Gestión de sesiones
 │   │   ├── handoffService.js      # Sistema de transferencia a humano
+│   │   ├── reminderService.js     # Sistema de recordatorios de citas
+│   │   ├── whatsappTemplateService.js # Envío de templates WhatsApp
 │   │   └── ...
 │   ├── middleware/           # Middleware de Express
 │   └── utils/                # Utilidades
@@ -182,6 +185,23 @@ Los mensajes se agrupan por 10 segundos antes de procesar para manejar usuarios 
 
 ### Manejo de Zona Horaria
 Todas las operaciones de fecha/hora usan la zona horaria de Colombia (`America/Bogota`) para asegurar agendamiento correcto de citas y saludos apropiados sin importar la ubicación del servidor.
+
+### Sistema de Recordatorios de Citas
+El sistema envía recordatorios automáticos vía WhatsApp a los pacientes un día antes de su cita:
+
+- **6:00 AM (Colombia)**: Se generan recordatorios para las citas del día siguiente
+- **8:00 AM (Colombia)**: Se envían los mensajes con template de WhatsApp
+- **Botones interactivos**: "Sí, confirmo" actualiza el estado a Confirmado en Dentalink; "No podré asistir" activa el bot para reagendar o cancelar
+- **Auto-limpieza**: Los recordatorios con más de 7 días se eliminan automáticamente
+- **Estados de seguimiento**: pending → sent → confirmed/cancelled/rescheduled
+
+## Funciones Programadas (Cloud Functions)
+
+| Función | Horario | Descripción |
+|---------|---------|-------------|
+| `cleanupSessions` | Cada hora | Elimina sesiones expiradas (>30 min) |
+| `generateDailyReminders` | 6:00 AM Colombia | Genera recordatorios para citas del día siguiente |
+| `sendScheduledReminders` | 8:00 AM Colombia | Envía templates de WhatsApp a recordatorios pendientes |
 
 ## Documentación
 

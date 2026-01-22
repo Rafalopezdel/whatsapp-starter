@@ -9,6 +9,35 @@ if (!admin.apps.length) {
 
 const LOG_FILE_NAME = 'conversations.json';
 
+// 🔒 Sistema de cola para evitar race conditions en escrituras
+const writeQueue = [];
+let isProcessingQueue = false;
+
+async function processWriteQueue() {
+  if (isProcessingQueue || writeQueue.length === 0) return;
+
+  isProcessingQueue = true;
+
+  while (writeQueue.length > 0) {
+    const { operation, resolve, reject } = writeQueue.shift();
+    try {
+      const result = await operation();
+      resolve(result);
+    } catch (error) {
+      reject(error);
+    }
+  }
+
+  isProcessingQueue = false;
+}
+
+function queueWriteOperation(operation) {
+  return new Promise((resolve, reject) => {
+    writeQueue.push({ operation, resolve, reject });
+    processWriteQueue();
+  });
+}
+
 // Lee conversaciones desde Storage
 async function readConversationsLog() {
   try {
@@ -64,48 +93,53 @@ function extractTextMessages(history) {
   return messages;
 }
 
-// Registra o actualiza conversación
-async function logConversation(userId, sessionHistory, userDocument = null, userName = null) {
-  try {
-    const conversations = await readConversationsLog();
-    const newTextMessages = extractTextMessages(sessionHistory);
+// Registra o actualiza conversación (operación interna)
+async function _logConversationInternal(userId, sessionHistory, userDocument = null, userName = null) {
+  const conversations = await readConversationsLog();
+  const newTextMessages = extractTextMessages(sessionHistory);
 
-    if (newTextMessages.length === 0) return;
+  if (newTextMessages.length === 0) return;
 
-    let conversation = findConversationByUserId(conversations, userId);
+  let conversation = findConversationByUserId(conversations, userId);
 
-    if (conversation) {
-      const existingMessages = conversation.messages || [];
-      const messagesToAdd = [];
+  if (conversation) {
+    const existingMessages = conversation.messages || [];
+    const messagesToAdd = [];
 
-      for (const newMsg of newTextMessages) {
-        const alreadyExists = existingMessages.some(
-          existing => existing.role === newMsg.role && existing.text === newMsg.text
-        );
-        if (!alreadyExists) {
-          messagesToAdd.push(newMsg);
-        }
+    for (const newMsg of newTextMessages) {
+      const alreadyExists = existingMessages.some(
+        existing => existing.role === newMsg.role && existing.text === newMsg.text
+      );
+      if (!alreadyExists) {
+        messagesToAdd.push(newMsg);
       }
-
-      if (messagesToAdd.length > 0) {
-        conversation.messages = [...existingMessages, ...messagesToAdd];
-        conversation.timestamp = new Date().toISOString();
-      }
-
-      if (userDocument !== null) conversation.userDocument = userDocument;
-      if (userName !== null) conversation.userName = userName;
-    } else {
-      conversation = {
-        userId,
-        userDocument,
-        userName,
-        timestamp: new Date().toISOString(),
-        messages: newTextMessages,
-      };
-      conversations.push(conversation);
     }
 
-    await writeConversationsLog(conversations);
+    if (messagesToAdd.length > 0) {
+      conversation.messages = [...existingMessages, ...messagesToAdd];
+      conversation.timestamp = new Date().toISOString();
+    }
+
+    if (userDocument !== null) conversation.userDocument = userDocument;
+    if (userName !== null) conversation.userName = userName;
+  } else {
+    conversation = {
+      userId,
+      userDocument,
+      userName,
+      timestamp: new Date().toISOString(),
+      messages: newTextMessages,
+    };
+    conversations.push(conversation);
+  }
+
+  await writeConversationsLog(conversations);
+}
+
+// Registra o actualiza conversación (con cola para evitar race conditions)
+async function logConversation(userId, sessionHistory, userDocument = null, userName = null) {
+  try {
+    await queueWriteOperation(() => _logConversationInternal(userId, sessionHistory, userDocument, userName));
   } catch (error) {
     console.error('❌ Error en logConversation:', error);
   }
@@ -137,44 +171,54 @@ async function getUserData(userId) {
   }
 }
 
-// Elimina conversación
+// Elimina conversación (operación interna)
+async function _deleteConversationInternal(userId) {
+  const conversations = await readConversationsLog();
+  const filtered = conversations.filter(conv => conv.userId !== userId);
+
+  if (filtered.length === conversations.length) return;
+
+  await writeConversationsLog(filtered);
+}
+
+// Elimina conversación (con cola para evitar race conditions)
 async function deleteConversation(userId) {
   try {
-    const conversations = await readConversationsLog();
-    const filtered = conversations.filter(conv => conv.userId !== userId);
-
-    if (filtered.length === conversations.length) return;
-
-    await writeConversationsLog(filtered);
+    await queueWriteOperation(() => _deleteConversationInternal(userId));
   } catch (error) {
     console.error('❌ Error eliminando conversación:', error);
   }
 }
 
-// Registra mensaje individual (para handoff)
+// Registra mensaje individual (operación interna)
+async function _logSimpleMessageInternal(userId, role, text, userDocument = null, userName = null) {
+  const conversations = await readConversationsLog();
+  let conversation = findConversationByUserId(conversations, userId);
+
+  if (!conversation) {
+    conversation = {
+      userId,
+      userDocument,
+      userName,
+      timestamp: new Date().toISOString(),
+      messages: [],
+    };
+    conversations.push(conversation);
+  }
+
+  conversation.messages.push({ role, text });
+  conversation.timestamp = new Date().toISOString();
+
+  if (userDocument !== null) conversation.userDocument = userDocument;
+  if (userName !== null) conversation.userName = userName;
+
+  await writeConversationsLog(conversations);
+}
+
+// Registra mensaje individual (con cola para evitar race conditions)
 async function logSimpleMessage(userId, role, text, userDocument = null, userName = null) {
   try {
-    const conversations = await readConversationsLog();
-    let conversation = findConversationByUserId(conversations, userId);
-
-    if (!conversation) {
-      conversation = {
-        userId,
-        userDocument,
-        userName,
-        timestamp: new Date().toISOString(),
-        messages: [],
-      };
-      conversations.push(conversation);
-    }
-
-    conversation.messages.push({ role, text });
-    conversation.timestamp = new Date().toISOString();
-
-    if (userDocument !== null) conversation.userDocument = userDocument;
-    if (userName !== null) conversation.userName = userName;
-
-    await writeConversationsLog(conversations);
+    await queueWriteOperation(() => _logSimpleMessageInternal(userId, role, text, userDocument, userName));
   } catch (error) {
     console.error('❌ Error en logSimpleMessage:', error);
   }
