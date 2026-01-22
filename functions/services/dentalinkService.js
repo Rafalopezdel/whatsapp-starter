@@ -132,7 +132,7 @@ exports.findPatientByPhone = async (phoneNumber) => {
 exports.getPatientById = async (patientId) => {
     try {
         const response = await api.get(`/pacientes/${patientId}`);
-        return response.data;
+        return response.data.data; // El paciente está en response.data.data
     } catch (error) {
         logApiError(error, "obteniendo paciente por ID");
         return null;
@@ -489,6 +489,20 @@ exports.cancelAppointment = async(id_cita, comentarios = "Cita anulada por el pa
     }
 }
 
+// Confirmar cita (actualiza estado a "Confirmado" - id_estado = 20)
+exports.confirmAppointment = async (appointmentId) => {
+    try {
+        const response = await api.put(`/citas/${appointmentId}`, {
+            id_estado: 20 // Estado "Confirmado"
+        });
+        console.log(`✅ Cita ${appointmentId} confirmada`);
+        return response.data;
+    } catch (error) {
+        console.error("❌ Error confirmando cita:", error.response?.data || error.message);
+        throw error;
+    }
+}
+
 // Obtiene citas del día actual
 exports.getDailyAppointments = async () => {
     return exports.getAppointmentsByDate(null);
@@ -521,6 +535,7 @@ exports.getAppointmentsByDate = async (dateStr = null) => {
 
         return citasActivas.map(cita => ({
             id: cita.id,
+            id_paciente: cita.id_paciente,
             nombre_paciente: cita.nombre_paciente || 'Sin nombre',
             fecha: cita.fecha,
             hora_inicio: cita.hora_inicio,

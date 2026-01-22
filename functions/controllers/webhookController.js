@@ -7,6 +7,7 @@ const configService = require('../services/configService');
 const handoffService = require('../services/handoffService');
 const assistantRouter = require('../services/assistantRouter');
 const conversationLogService = require('../services/conversationLogService');
+const reminderService = require('../services/reminderService');
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
@@ -26,6 +27,10 @@ exports.handleWebhook = async (req, res) => {
     console.log(`\n${'='.repeat(60)}`);
     console.log(`📥 [WEBHOOK] ${new Date().toISOString()}`);
 
+    // DEBUG: Log raw body para ver TODO lo que llega
+    console.log(`🔍 [DEBUG] Raw body type: ${typeof req.body}`);
+    console.log(`🔍 [DEBUG] Raw body: ${JSON.stringify(req.body).substring(0, 500)}`);
+
     try {
         res.sendStatus(200);
         logger('Evento recibido', req.body);
@@ -38,9 +43,62 @@ exports.handleWebhook = async (req, res) => {
         if (statuses) return;
 
         const message = value?.messages?.[0];
-        if (!message) return;
+        if (!message) {
+            console.log(`🔍 [DEBUG] No hay mensaje en el evento (probablemente status update)`);
+            return;
+        }
 
         const from = message.from;
+
+        // DEBUG: Log message type
+        console.log(`🔍 [DEBUG] Message type: "${message.type}"`);
+        console.log(`🔍 [DEBUG] Message keys: ${Object.keys(message).join(', ')}`);
+        if (message.button) {
+            console.log(`🔍 [DEBUG] Button payload: "${message.button?.payload}"`);
+        }
+
+        // 🔔 MANEJO DE RESPUESTAS DE BOTONES DE TEMPLATES (Recordatorios de citas)
+        // Los botones de templates vienen como type="button" con button.payload
+        if (message.type === 'button' && message.button?.payload) {
+            const buttonPayload = message.button.payload.toLowerCase().trim();
+            console.log(`🔘 Respuesta de botón de template: "${buttonPayload}" de ${from}`);
+
+            // Detectar confirmación
+            if (buttonPayload.includes('confirmo') || buttonPayload.includes('sí')) {
+                console.log(`✅ Procesando confirmación de cita para ${from}`);
+                await reminderService.processConfirmation(from);
+                return;
+            }
+
+            // Detectar cancelación
+            if (buttonPayload.includes('no podré') || buttonPayload.includes('no podre') || buttonPayload.includes('cancelar')) {
+                console.log(`❌ Procesando cancelación de cita para ${from}`);
+                await reminderService.processCancellation(from);
+                return;
+            }
+
+            // Si es otro botón de template, continuar con el flujo normal
+            console.log(`ℹ️ Botón de template no reconocido: "${buttonPayload}", continuando flujo normal`);
+        }
+
+        // También manejar botones interactivos (por si se usan en el futuro)
+        if (message.type === 'interactive' && message.interactive?.type === 'button_reply') {
+            const buttonTitle = message.interactive.button_reply.title?.toLowerCase().trim();
+            console.log(`🔘 Respuesta de botón interactivo: "${buttonTitle}" de ${from}`);
+
+            if (buttonTitle?.includes('confirmo')) {
+                console.log(`✅ Procesando confirmación de cita para ${from}`);
+                await reminderService.processConfirmation(from);
+                return;
+            }
+
+            if (buttonTitle?.includes('no podré') || buttonTitle?.includes('cancelar')) {
+                console.log(`❌ Procesando cancelación de cita para ${from}`);
+                await reminderService.processCancellation(from);
+                return;
+            }
+        }
+
         const userMessageContent = message.type === 'text' ? message.text.body : message.interactive?.list_reply?.title || message.interactive?.button_reply?.title;
         if (!userMessageContent) return;
 

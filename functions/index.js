@@ -112,6 +112,169 @@ app.post("/setup-agent", async (req, res) => {
 });
 
 // ========================================
+// 🧪 TEST ENDPOINTS PARA RECORDATORIOS
+// ========================================
+
+// Crear recordatorio de prueba y enviar template
+app.post("/test/create-reminder", async (req, res) => {
+  try {
+    const {phone, name, appointmentId, patientId, date, time, dateFormatted, timeFormatted} = req.body;
+
+    const testPhone = phone || "573006436473";
+    const testName = name || "Usuario Prueba";
+    const testAppointmentId = appointmentId || 99999;
+    const testPatientId = patientId || 99999;
+    const testDate = date || "2026-01-22";
+    const testTime = time || "10:00";
+    const testDateFormatted = dateFormatted || "miércoles 22 de enero";
+    const testTimeFormatted = timeFormatted || "10:00 AM";
+
+    const admin = require("firebase-admin");
+    const db = admin.firestore();
+    const whatsappTemplateService = require("./services/whatsappTemplateService");
+
+    // Crear recordatorio en Firestore
+    const reminderData = {
+      appointmentId: testAppointmentId,
+      patientId: testPatientId,
+      patientPhone: testPhone,
+      patientName: testName,
+      appointmentDate: testDate,
+      appointmentTime: testTime,
+      reminderStatus: "sent",
+      sentAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    const docRef = await db.collection("appointment_reminders").add(reminderData);
+    console.log(`✅ Recordatorio creado: ${docRef.id}`);
+
+    // Enviar template
+    const result = await whatsappTemplateService.sendAppointmentReminder(
+        testPhone,
+        testName,
+        testDateFormatted,
+        testTimeFormatted,
+    );
+
+    res.status(200).json({
+      success: true,
+      reminderId: docRef.id,
+      appointmentId: testAppointmentId,
+      templateSent: result.success,
+      message: "Recordatorio creado y template enviado. Haz click en el botón para probar.",
+    });
+  } catch (error) {
+    console.error("❌ Error en test:", error);
+    res.status(500).json({error: error.message});
+  }
+});
+
+// Ver estadísticas de recordatorios
+app.get("/test/reminder-stats", async (req, res) => {
+  try {
+    const reminderService = require("./services/reminderService");
+    const stats = await reminderService.getReminderStats();
+    res.status(200).json(stats);
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+});
+
+// 🔥 Disparar generación de recordatorios manualmente (simula el cron de las 6 AM)
+// Busca citas de MAÑANA en Dentalink y crea recordatorios en Firestore
+app.post("/test/generate-reminders", async (req, res) => {
+  try {
+    console.log("🧪 [TEST] Disparando generateRemindersForTomorrow manualmente...");
+    const reminderService = require("./services/reminderService");
+    const stats = await reminderService.generateRemindersForTomorrow();
+    res.status(200).json({
+      success: true,
+      message: "Generación de recordatorios completada",
+      stats: stats,
+    });
+  } catch (error) {
+    console.error("❌ Error en test generate-reminders:", error);
+    res.status(500).json({error: error.message});
+  }
+});
+
+// 🔍 Debug: Ver citas de mañana y sus estados
+app.get("/test/debug-tomorrow-appointments", async (req, res) => {
+  try {
+    const dentalinkService = require("./services/dentalinkService");
+    const {getColombiaDateObject} = require("./utils/dateHelper");
+
+    // Calcular fecha de mañana
+    const colombia = getColombiaDateObject();
+    colombia.setDate(colombia.getDate() + 1);
+    const year = colombia.getFullYear();
+    const month = String(colombia.getMonth() + 1).padStart(2, "0");
+    const day = String(colombia.getDate()).padStart(2, "0");
+    const tomorrowDate = `${year}-${month}-${day}`;
+
+    console.log(`🔍 [DEBUG] Consultando citas para: ${tomorrowDate}`);
+
+    const appointments = await dentalinkService.getAppointmentsByDate(tomorrowDate);
+
+    // Para cada cita, intentar obtener el paciente
+    const detailedAppointments = [];
+    for (const apt of appointments.slice(0, 10)) { // Limitar a 10
+      let patientInfo = null;
+      try {
+        const patient = await dentalinkService.getPatientById(apt.id_paciente);
+        patientInfo = {
+          id: patient?.id,
+          nombre: patient?.nombre,
+          celular: patient?.celular,
+          telefono: patient?.telefono,
+        };
+      } catch (e) {
+        patientInfo = {error: e.message};
+      }
+
+      detailedAppointments.push({
+        id: apt.id,
+        fecha: apt.fecha,
+        hora: apt.hora_inicio,
+        id_estado: apt.id_estado,
+        estado_nombre: apt.estado || "desconocido",
+        id_paciente: apt.id_paciente,
+        nombre_paciente: apt.nombre_paciente,
+        patientData: patientInfo,
+      });
+    }
+
+    res.status(200).json({
+      tomorrowDate: tomorrowDate,
+      totalAppointments: appointments.length,
+      appointments: detailedAppointments,
+    });
+  } catch (error) {
+    console.error("❌ Error en debug:", error);
+    res.status(500).json({error: error.message});
+  }
+});
+
+// 📤 Disparar envío de recordatorios manualmente (simula el cron de las 8 AM)
+// Envía templates de WhatsApp para todos los recordatorios pendientes
+app.post("/test/send-reminders", async (req, res) => {
+  try {
+    console.log("🧪 [TEST] Disparando sendPendingReminders manualmente...");
+    const reminderService = require("./services/reminderService");
+    const stats = await reminderService.sendPendingReminders();
+    res.status(200).json({
+      success: true,
+      message: "Envío de recordatorios completado",
+      stats: stats,
+    });
+  } catch (error) {
+    console.error("❌ Error en test send-reminders:", error);
+    res.status(500).json({error: error.message});
+  }
+});
+
+// ========================================
 // 📊 DASHBOARD API ROUTES
 // ========================================
 // Rutas protegidas con autenticación Bearer token para la interfaz web
@@ -151,6 +314,48 @@ exports.cleanupSessions = onSchedule("every 1 hours", async (event) => {
   const firestoreService = require("./services/firestoreService");
   const deletedCount = await firestoreService.deleteExpiredSessions();
   console.log(`🧹 Limpieza automática: ${deletedCount} sesiones eliminadas`);
+  return null;
+});
+
+// ========================================
+// 🔔 SISTEMA DE RECORDATORIOS DE CITAS
+// ========================================
+
+// Genera registros de recordatorio para las citas de mañana
+// Se ejecuta a las 11:00 UTC = 6:00 AM Colombia
+exports.generateDailyReminders = onSchedule({
+  schedule: "0 11 * * *",
+  timeZone: "America/Bogota",
+  timeoutSeconds: 300,
+  memory: "512MiB",
+}, async (event) => {
+  console.log("🔔 [CRON] Iniciando generación de recordatorios diarios...");
+  try {
+    const reminderService = require("./services/reminderService");
+    const stats = await reminderService.generateRemindersForTomorrow();
+    console.log(`✅ Generación completada: ${JSON.stringify(stats)}`);
+  } catch (error) {
+    console.error("❌ Error en generación de recordatorios:", error);
+  }
+  return null;
+});
+
+// Envía los recordatorios pendientes
+// Se ejecuta a las 13:00 UTC = 8:00 AM Colombia
+exports.sendScheduledReminders = onSchedule({
+  schedule: "0 13 * * *",
+  timeZone: "America/Bogota",
+  timeoutSeconds: 540,
+  memory: "512MiB",
+}, async (event) => {
+  console.log("📤 [CRON] Iniciando envío de recordatorios programados...");
+  try {
+    const reminderService = require("./services/reminderService");
+    const stats = await reminderService.sendPendingReminders();
+    console.log(`✅ Envío completado: ${JSON.stringify(stats)}`);
+  } catch (error) {
+    console.error("❌ Error en envío de recordatorios:", error);
+  }
   return null;
 });
 
