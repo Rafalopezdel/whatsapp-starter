@@ -32,8 +32,7 @@ Un chatbot de WhatsApp listo para producción para clínicas dentales que integr
 
 - **Backend**: Node.js + Express en Firebase Cloud Functions (Gen 2)
 - **IA**: Claude AI (claude-sonnet-4-20250514) con tool calling
-- **Base de Datos**: Firebase Firestore para sesiones y handoffs
-- **Almacenamiento**: Firebase Storage para logs de conversaciones
+- **Base de Datos**: Firebase Firestore para sesiones, handoffs y logs de conversaciones (con transacciones atómicas)
 - **Frontend**: React 19 + Vite + Tailwind CSS (Dashboard de Agentes)
 - **APIs**: WhatsApp Business API (Meta), Dentalink API
 
@@ -175,7 +174,7 @@ El chatbot usa Claude AI con tool calling para ejecutar acciones:
 ## Características Principales
 
 ### Memoria Persistente
-El sistema almacena el historial de conversaciones en Firebase Storage. Cuando un usuario recurrente escribe, se cargan sus interacciones previas y datos de paciente, permitiendo saludos personalizados sin volver a pedir información.
+El sistema almacena el historial de conversaciones en la colección `conversations` de Firestore con transacciones atómicas para prevenir condiciones de carrera. Cuando un usuario recurrente escribe, se cargan sus interacciones previas y datos de paciente, permitiendo saludos personalizados sin volver a pedir información.
 
 ### Sistema de Transferencia a Humano
 Cuando la IA no puede manejar una solicitud o el usuario pide ayuda explícitamente, el tool `requestHumanAgent` crea un puente entre el paciente y un agente humano. El agente recibe una notificación y puede responder a través del dashboard web.

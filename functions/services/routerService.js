@@ -248,11 +248,12 @@ async function routeByIntent({ from, freeText, session }) {
     }
 
     // INTERCEPTOR: Matching automático de slots (solo para CREACIÓN de citas nuevas)
+    console.log(`🔍 [MATCHING] availableSlots: ${session.availableSlots?.length || 0}, id_sesion: ${session.id_sesion || 'null'}`);
     if (session.availableSlots && session.availableSlots.length > 0 && !session.id_sesion) {
         const matchedSlot = slotMatcher.matchSlot(freeText, session.availableSlots);
 
         if (matchedSlot) {
-            console.log(`✅ Match automático: ${matchedSlot.fecha} ${matchedSlot.hora}`);
+            console.log(`✅ [MATCHING] Match encontrado: ${matchedSlot.fecha} ${matchedSlot.hora}`);
 
             try {
                 const reason = extractReasonFromHistory(session.history);
@@ -285,8 +286,14 @@ async function routeByIntent({ from, freeText, session }) {
                     });
 
                     let userName = session.data?.userName || null;
-                    conversationLogService.logConversation(from, session.history, documentNumber, userName)
-                        .catch(err => console.error('❌ Error en logConversation (matching):', err));
+                    console.log(`📝 [MATCHING] Guardando historial con ${session.history.length} items`);
+                    console.log(`📝 [MATCHING] Último msg: ${session.history[session.history.length-1]?.content?.substring(0,50)}...`);
+                    try {
+                        await conversationLogService.logConversation(from, session.history, documentNumber, userName);
+                        console.log(`✅ [MATCHING] logConversation completado`);
+                    } catch (err) {
+                        console.error('❌ Error en logConversation (matching):', err);
+                    }
 
                     console.log(`✅ Cita creada mediante matching automático`);
                     console.log(`${'~'.repeat(60)}\n`);
@@ -619,6 +626,13 @@ IMPORTANT:
                         comentarios || "Cita anulada por el paciente"
                     );
 
+                    // Limpiar id_sesion para permitir nuevas citas con matching automático
+                    session.id_sesion = null;
+                    await setSession(from, {
+                        ...session,
+                        id_sesion: null
+                    });
+
                     toolResult = `✅ Appointment on ${result.data.fecha} at ${result.data.hora_inicio} has been successfully cancelled.`;
                 } catch (error) {
                     console.error("❌ Error en cancelAppointment:", error);
@@ -743,9 +757,21 @@ IMPORTANT:
             }
         }
 
-        // Log en background
-        conversationLogService.logConversation(from, historyForConversationLog, userDocument, userName)
-            .catch(err => console.error('❌ Error logging conversation:', err));
+        // Log conversación (await para garantizar escritura antes de terminar)
+        try {
+            // DEBUG: Ver qué mensajes se envían a logConversation
+            const textMessages = historyForConversationLog.filter(item =>
+                typeof item.content === 'string' &&
+                (item.role === 'user' || item.role === 'assistant')
+            );
+            console.log(`📝 [LOG] Enviando ${textMessages.length} mensajes a logConversation`);
+            console.log(`📝 [LOG] Último mensaje: ${textMessages[textMessages.length - 1]?.content?.substring(0, 50)}...`);
+
+            await conversationLogService.logConversation(from, historyForConversationLog, userDocument, userName);
+            console.log(`✅ [LOG] logConversation completado`);
+        } catch (err) {
+            console.error('❌ Error logging conversation:', err);
+        }
     }
 
     console.log(`${'~'.repeat(60)}\n`);

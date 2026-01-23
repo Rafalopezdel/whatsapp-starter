@@ -72,6 +72,7 @@ TESTING.md
 TESTING_STRATEGY.md
 WHATSAPP_META_SETUP.md
 setup-environments.md
+WHITEPAPER_TECNICO.md
 
 # Test and utility scripts
 test-*.js
@@ -82,6 +83,7 @@ get-firebase-config.js
 get-project-info.js
 setup-agent-config.js
 ia_payload.json
+migrate-conversations-to-firestore.js
 
 # Deploy scripts (keep deployment local)
 deploy-*.sh

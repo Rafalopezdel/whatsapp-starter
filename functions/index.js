@@ -256,6 +256,110 @@ app.get("/test/debug-tomorrow-appointments", async (req, res) => {
   }
 });
 
+// 🔄 MIGRACIÓN: Migrar conversations.json (Storage) → Firestore
+// EJECUTAR UNA SOLA VEZ después de desplegar
+app.post("/migrate/conversations-to-firestore", async (req, res) => {
+  try {
+    const accessToken = req.query.token;
+    if (accessToken !== process.env.VERIFY_TOKEN) {
+      return res.status(403).json({error: "Unauthorized - Invalid token"});
+    }
+
+    console.log("🔄 [MIGRACIÓN] Iniciando migración de Storage a Firestore...");
+
+    const admin = require("firebase-admin");
+    const db = admin.firestore();
+    const bucket = admin.storage().bucket();
+
+    // 1. Leer conversations.json desde Storage
+    const file = bucket.file("conversations.json");
+    const [exists] = await file.exists();
+
+    if (!exists) {
+      return res.status(404).json({
+        success: false,
+        message: "No existe conversations.json en Storage",
+      });
+    }
+
+    const [contents] = await file.download();
+    const conversations = JSON.parse(contents.toString("utf8"));
+
+    console.log(`📥 Encontradas ${conversations.length} conversaciones en Storage`);
+
+    // 2. Migrar cada conversación a Firestore
+    let migrated = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    for (const conv of conversations) {
+      try {
+        const userId = conv.userId;
+        if (!userId) {
+          skipped++;
+          continue;
+        }
+
+        const docRef = db.collection("conversations").doc(userId);
+        const existingDoc = await docRef.get();
+
+        if (existingDoc.exists) {
+          // Merge messages
+          const existingData = existingDoc.data();
+          const existingMessages = existingData.messages || [];
+          const newMessages = conv.messages || [];
+
+          const allMessages = [...existingMessages];
+          for (const msg of newMessages) {
+            const msgExists = allMessages.some(
+                (m) => m.role === msg.role && m.text === msg.text,
+            );
+            if (!msgExists) {
+              allMessages.push(msg);
+            }
+          }
+
+          await docRef.update({
+            messages: allMessages,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            userDocument: conv.userDocument || existingData.userDocument || null,
+            userName: conv.userName || existingData.userName || null,
+          });
+        } else {
+          await docRef.set({
+            userId: userId,
+            userDocument: conv.userDocument || null,
+            userName: conv.userName || null,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            messages: conv.messages || [],
+          });
+        }
+
+        migrated++;
+      } catch (error) {
+        console.error(`❌ Error migrando ${conv.userId}:`, error.message);
+        errors++;
+      }
+    }
+
+    console.log(`✅ [MIGRACIÓN] Completada: ${migrated} migradas, ${skipped} saltadas, ${errors} errores`);
+
+    res.status(200).json({
+      success: true,
+      message: "Migración completada",
+      stats: {
+        total: conversations.length,
+        migrated: migrated,
+        skipped: skipped,
+        errors: errors,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Error en migración:", error);
+    res.status(500).json({error: error.message});
+  }
+});
+
 // 📤 Disparar envío de recordatorios manualmente (simula el cron de las 8 AM)
 // Envía templates de WhatsApp para todos los recordatorios pendientes
 app.post("/test/send-reminders", async (req, res) => {
