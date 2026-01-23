@@ -1,5 +1,5 @@
 // services/conversationLogService.js
-// Log de conversaciones en Firebase Storage
+// Log de conversaciones en Firestore (con transacciones atómicas)
 
 const admin = require('firebase-admin');
 
@@ -7,73 +7,8 @@ if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-const LOG_FILE_NAME = 'conversations.json';
-
-// 🔒 Sistema de cola para evitar race conditions en escrituras
-const writeQueue = [];
-let isProcessingQueue = false;
-
-async function processWriteQueue() {
-  if (isProcessingQueue || writeQueue.length === 0) return;
-
-  isProcessingQueue = true;
-
-  while (writeQueue.length > 0) {
-    const { operation, resolve, reject } = writeQueue.shift();
-    try {
-      const result = await operation();
-      resolve(result);
-    } catch (error) {
-      reject(error);
-    }
-  }
-
-  isProcessingQueue = false;
-}
-
-function queueWriteOperation(operation) {
-  return new Promise((resolve, reject) => {
-    writeQueue.push({ operation, resolve, reject });
-    processWriteQueue();
-  });
-}
-
-// Lee conversaciones desde Storage
-async function readConversationsLog() {
-  try {
-    const bucket = admin.storage().bucket();
-    const file = bucket.file(LOG_FILE_NAME);
-
-    const [exists] = await file.exists();
-    if (!exists) return [];
-
-    const [contents] = await file.download();
-    return JSON.parse(contents.toString('utf8'));
-  } catch (error) {
-    console.error('❌ Error leyendo conversations.json:', error);
-    return [];
-  }
-}
-
-// Escribe conversaciones a Storage
-async function writeConversationsLog(conversations) {
-  try {
-    const bucket = admin.storage().bucket();
-    const file = bucket.file(LOG_FILE_NAME);
-
-    const jsonContent = JSON.stringify(conversations, null, 2);
-    await file.save(jsonContent, {
-      contentType: 'application/json',
-      metadata: { cacheControl: 'no-cache' },
-    });
-  } catch (error) {
-    console.error('❌ Error escribiendo conversations.json:', error);
-  }
-}
-
-function findConversationByUserId(conversations, userId) {
-  return conversations.find(conv => conv.userId === userId) || null;
-}
+const db = admin.firestore();
+const COLLECTION_NAME = 'conversations';
 
 // Extrae solo mensajes de texto visibles en WhatsApp
 function extractTextMessages(history) {
@@ -93,77 +28,148 @@ function extractTextMessages(history) {
   return messages;
 }
 
-// Registra o actualiza conversación (operación interna)
-async function _logConversationInternal(userId, sessionHistory, userDocument = null, userName = null) {
-  const conversations = await readConversationsLog();
-  const newTextMessages = extractTextMessages(sessionHistory);
-
-  if (newTextMessages.length === 0) return;
-
-  let conversation = findConversationByUserId(conversations, userId);
-
-  if (conversation) {
-    const existingMessages = conversation.messages || [];
-    const messagesToAdd = [];
-
-    for (const newMsg of newTextMessages) {
-      const alreadyExists = existingMessages.some(
-        existing => existing.role === newMsg.role && existing.text === newMsg.text
-      );
-      if (!alreadyExists) {
-        messagesToAdd.push(newMsg);
-      }
-    }
-
-    if (messagesToAdd.length > 0) {
-      conversation.messages = [...existingMessages, ...messagesToAdd];
-      conversation.timestamp = new Date().toISOString();
-    }
-
-    if (userDocument !== null) conversation.userDocument = userDocument;
-    if (userName !== null) conversation.userName = userName;
-  } else {
-    conversation = {
-      userId,
-      userDocument,
-      userName,
-      timestamp: new Date().toISOString(),
-      messages: newTextMessages,
-    };
-    conversations.push(conversation);
-  }
-
-  await writeConversationsLog(conversations);
-}
-
-// Registra o actualiza conversación (con cola para evitar race conditions)
+// Registra o actualiza conversación usando transacción atómica
 async function logConversation(userId, sessionHistory, userDocument = null, userName = null) {
   try {
-    await queueWriteOperation(() => _logConversationInternal(userId, sessionHistory, userDocument, userName));
+    console.log(`📥 [CONVLOG] logConversation para ${userId}`);
+
+    const newTextMessages = extractTextMessages(sessionHistory);
+
+    if (newTextMessages.length === 0) {
+      console.log(`⚠️ [CONVLOG] No hay mensajes de texto para guardar`);
+      return;
+    }
+
+    const lastMsg = newTextMessages[newTextMessages.length - 1];
+    console.log(`📥 [CONVLOG] Último mensaje: [${lastMsg.role}] ${lastMsg.text.substring(0, 50)}...`);
+
+    const docRef = db.collection(COLLECTION_NAME).doc(userId);
+
+    // Usar transacción para garantizar escritura atómica
+    await db.runTransaction(async (transaction) => {
+      const doc = await transaction.get(docRef);
+
+      let existingMessages = [];
+      let conversationData = {
+        userId,
+        userDocument,
+        userName,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        messages: []
+      };
+
+      if (doc.exists) {
+        const data = doc.data();
+        existingMessages = data.messages || [];
+        conversationData = {
+          ...data,
+          timestamp: admin.firestore.FieldValue.serverTimestamp()
+        };
+      }
+
+      // Estrategia simple: siempre agregar los últimos 2 mensajes del historial actual
+      // (mensaje del usuario + respuesta del bot de esta interacción)
+      const lastTwo = newTextMessages.slice(-2);
+
+      console.log(`📥 [CONVLOG] Existentes: ${existingMessages.length}, Agregando: ${lastTwo.length}`);
+
+      conversationData.messages = [...existingMessages, ...lastTwo];
+
+      // Actualizar datos del usuario si se proporcionan
+      if (userDocument !== null) conversationData.userDocument = userDocument;
+      if (userName !== null) conversationData.userName = userName;
+
+      transaction.set(docRef, conversationData, { merge: true });
+    });
+
+    console.log(`✅ [CONVLOG] Transacción completada para ${userId}`);
+
   } catch (error) {
     console.error('❌ Error en logConversation:', error);
   }
 }
 
+// Registra mensaje individual con transacción atómica
+async function logSimpleMessage(userId, role, text, userDocument = null, userName = null) {
+  try {
+    const docRef = db.collection(COLLECTION_NAME).doc(userId);
+
+    await db.runTransaction(async (transaction) => {
+      const doc = await transaction.get(docRef);
+
+      let conversationData;
+
+      if (doc.exists) {
+        const data = doc.data();
+        conversationData = {
+          ...data,
+          messages: [...(data.messages || []), { role, text }],
+          timestamp: admin.firestore.FieldValue.serverTimestamp()
+        };
+      } else {
+        conversationData = {
+          userId,
+          userDocument,
+          userName,
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          messages: [{ role, text }]
+        };
+      }
+
+      if (userDocument !== null) conversationData.userDocument = userDocument;
+      if (userName !== null) conversationData.userName = userName;
+
+      transaction.set(docRef, conversationData, { merge: true });
+    });
+
+    console.log(`✅ [CONVLOG] Mensaje simple agregado para ${userId}`);
+
+  } catch (error) {
+    console.error('❌ Error en logSimpleMessage:', error);
+  }
+}
+
 // Obtiene todas las conversaciones
 async function getAllConversations() {
-  return await readConversationsLog();
+  try {
+    const snapshot = await db.collection(COLLECTION_NAME)
+      .orderBy('timestamp', 'desc')
+      .get();
+
+    const conversations = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      conversations.push({
+        userId: data.userId,
+        userDocument: data.userDocument || null,
+        userName: data.userName || null,
+        timestamp: data.timestamp?.toDate?.()?.toISOString() || null,
+        messages: data.messages || []
+      });
+    });
+
+    return conversations;
+  } catch (error) {
+    console.error('❌ Error en getAllConversations:', error);
+    return [];
+  }
 }
 
 // Obtiene datos de un usuario (memoria persistente)
 async function getUserData(userId) {
   try {
-    const conversations = await readConversationsLog();
-    const conversation = findConversationByUserId(conversations, userId);
+    const docRef = db.collection(COLLECTION_NAME).doc(userId);
+    const doc = await docRef.get();
 
-    if (!conversation) return null;
+    if (!doc.exists) return null;
 
+    const data = doc.data();
     return {
-      userId: conversation.userId,
-      userDocument: conversation.userDocument || null,
-      userName: conversation.userName || null,
-      hasHistory: conversation.messages && conversation.messages.length > 0,
-      lastInteraction: conversation.timestamp || null
+      userId: data.userId,
+      userDocument: data.userDocument || null,
+      userName: data.userName || null,
+      hasHistory: data.messages && data.messages.length > 0,
+      lastInteraction: data.timestamp?.toDate?.()?.toISOString() || null
     };
   } catch (error) {
     console.error('❌ Error en getUserData:', error);
@@ -171,56 +177,35 @@ async function getUserData(userId) {
   }
 }
 
-// Elimina conversación (operación interna)
-async function _deleteConversationInternal(userId) {
-  const conversations = await readConversationsLog();
-  const filtered = conversations.filter(conv => conv.userId !== userId);
-
-  if (filtered.length === conversations.length) return;
-
-  await writeConversationsLog(filtered);
-}
-
-// Elimina conversación (con cola para evitar race conditions)
+// Elimina conversación
 async function deleteConversation(userId) {
   try {
-    await queueWriteOperation(() => _deleteConversationInternal(userId));
+    await db.collection(COLLECTION_NAME).doc(userId).delete();
+    console.log(`✅ [CONVLOG] Conversación eliminada para ${userId}`);
   } catch (error) {
     console.error('❌ Error eliminando conversación:', error);
   }
 }
 
-// Registra mensaje individual (operación interna)
-async function _logSimpleMessageInternal(userId, role, text, userDocument = null, userName = null) {
-  const conversations = await readConversationsLog();
-  let conversation = findConversationByUserId(conversations, userId);
-
-  if (!conversation) {
-    conversation = {
-      userId,
-      userDocument,
-      userName,
-      timestamp: new Date().toISOString(),
-      messages: [],
-    };
-    conversations.push(conversation);
-  }
-
-  conversation.messages.push({ role, text });
-  conversation.timestamp = new Date().toISOString();
-
-  if (userDocument !== null) conversation.userDocument = userDocument;
-  if (userName !== null) conversation.userName = userName;
-
-  await writeConversationsLog(conversations);
-}
-
-// Registra mensaje individual (con cola para evitar race conditions)
-async function logSimpleMessage(userId, role, text, userDocument = null, userName = null) {
+// Obtiene una conversación específica por userId
+async function getConversation(userId) {
   try {
-    await queueWriteOperation(() => _logSimpleMessageInternal(userId, role, text, userDocument, userName));
+    const docRef = db.collection(COLLECTION_NAME).doc(userId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) return null;
+
+    const data = doc.data();
+    return {
+      userId: data.userId,
+      userDocument: data.userDocument || null,
+      userName: data.userName || null,
+      timestamp: data.timestamp?.toDate?.()?.toISOString() || null,
+      messages: data.messages || []
+    };
   } catch (error) {
-    console.error('❌ Error en logSimpleMessage:', error);
+    console.error('❌ Error en getConversation:', error);
+    return null;
   }
 }
 
@@ -230,4 +215,5 @@ module.exports = {
   getAllConversations,
   getUserData,
   deleteConversation,
+  getConversation,
 };
