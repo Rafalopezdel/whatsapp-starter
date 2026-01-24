@@ -187,6 +187,56 @@ async function deleteConversation(userId) {
   }
 }
 
+// Registra mensaje de media con transacción atómica
+async function logMediaMessage(userId, role, mediaData, userDocument = null, userName = null) {
+  try {
+    // mediaData: { mediaUrl, mediaType, mimeType, caption }
+    const message = {
+      role: role,
+      text: mediaData.caption || `[${mediaData.mediaType}]`,
+      mediaUrl: mediaData.mediaUrl,
+      mediaType: mediaData.mediaType,
+      mimeType: mediaData.mimeType,
+      timestamp: new Date().toISOString()
+    };
+
+    const docRef = db.collection(COLLECTION_NAME).doc(userId);
+
+    await db.runTransaction(async (transaction) => {
+      const doc = await transaction.get(docRef);
+
+      let conversationData;
+
+      if (doc.exists) {
+        const data = doc.data();
+        conversationData = {
+          ...data,
+          messages: [...(data.messages || []), message],
+          timestamp: admin.firestore.FieldValue.serverTimestamp()
+        };
+      } else {
+        conversationData = {
+          userId,
+          userDocument,
+          userName,
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          messages: [message]
+        };
+      }
+
+      if (userDocument !== null) conversationData.userDocument = userDocument;
+      if (userName !== null) conversationData.userName = userName;
+
+      transaction.set(docRef, conversationData, { merge: true });
+    });
+
+    console.log(`✅ [CONVLOG] Mensaje de media (${mediaData.mediaType}) agregado para ${userId}`);
+
+  } catch (error) {
+    console.error('❌ Error en logMediaMessage:', error);
+  }
+}
+
 // Obtiene una conversación específica por userId
 async function getConversation(userId) {
   try {
@@ -212,6 +262,7 @@ async function getConversation(userId) {
 module.exports = {
   logConversation,
   logSimpleMessage,
+  logMediaMessage,
   getAllConversations,
   getUserData,
   deleteConversation,

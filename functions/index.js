@@ -379,6 +379,57 @@ app.post("/test/send-reminders", async (req, res) => {
 });
 
 // ========================================
+// 📎 TEST ENDPOINTS PARA MULTIMEDIA
+// ========================================
+
+// Disparar limpieza de media manualmente
+app.post("/test/cleanup-media", async (req, res) => {
+  try {
+    const accessToken = req.query.token;
+    if (accessToken !== process.env.VERIFY_TOKEN) {
+      return res.status(403).json({error: "Unauthorized - Invalid token"});
+    }
+
+    const daysOld = parseInt(req.body.daysOld, 10) || 60;
+    console.log(`🧪 [TEST] Disparando limpieza de media > ${daysOld} días...`);
+
+    const mediaService = require("./services/mediaService");
+    const deletedCount = await mediaService.cleanupOldMedia(daysOld);
+
+    res.status(200).json({
+      success: true,
+      message: `Limpieza completada: ${deletedCount} archivos eliminados`,
+      deletedCount: deletedCount,
+      daysOld: daysOld,
+    });
+  } catch (error) {
+    console.error("❌ Error en cleanup-media:", error);
+    res.status(500).json({error: error.message});
+  }
+});
+
+// Ver estadísticas de media
+app.get("/test/media-stats", async (req, res) => {
+  try {
+    const accessToken = req.query.token;
+    if (accessToken !== process.env.VERIFY_TOKEN) {
+      return res.status(403).json({error: "Unauthorized - Invalid token"});
+    }
+
+    const mediaService = require("./services/mediaService");
+    const stats = await mediaService.getMediaStats();
+
+    res.status(200).json({
+      success: true,
+      stats: stats,
+    });
+  } catch (error) {
+    console.error("❌ Error en media-stats:", error);
+    res.status(500).json({error: error.message});
+  }
+});
+
+// ========================================
 // 📊 DASHBOARD API ROUTES
 // ========================================
 // Rutas protegidas con autenticación Bearer token para la interfaz web
@@ -394,6 +445,9 @@ app.get("/dashboard/session/:sessionId", authenticateDashboard, dashboardControl
 
 // Enviar mensaje desde el dashboard
 app.post("/dashboard/send-message", authenticateDashboard, dashboardController.sendMessageFromDashboard);
+
+// Enviar media desde el dashboard (imagen, video, audio, documento)
+app.post("/dashboard/send-media", authenticateDashboard, dashboardController.sendMediaFromDashboard);
 
 // Iniciar intervención (handoff)
 app.post("/dashboard/intervene", authenticateDashboard, dashboardController.startIntervention);
@@ -459,6 +513,29 @@ exports.sendScheduledReminders = onSchedule({
     console.log(`✅ Envío completado: ${JSON.stringify(stats)}`);
   } catch (error) {
     console.error("❌ Error en envío de recordatorios:", error);
+  }
+  return null;
+});
+
+// ========================================
+// 📎 LIMPIEZA DE MULTIMEDIA
+// ========================================
+
+// Elimina archivos de media con más de 60 días de antigüedad
+// Se ejecuta a las 8:00 UTC = 3:00 AM Colombia (fuera de horario de uso)
+exports.cleanupOldMedia = onSchedule({
+  schedule: "0 8 * * *",
+  timeZone: "America/Bogota",
+  timeoutSeconds: 300,
+  memory: "512MiB",
+}, async (event) => {
+  console.log("🧹 [CRON] Iniciando limpieza de media antigua...");
+  try {
+    const mediaService = require("./services/mediaService");
+    const deletedCount = await mediaService.cleanupOldMedia(60);
+    console.log(`✅ Limpieza completada: ${deletedCount} archivos eliminados`);
+  } catch (error) {
+    console.error("❌ Error en limpieza de media:", error);
   }
   return null;
 });

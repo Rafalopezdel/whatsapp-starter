@@ -3,7 +3,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
 import { useFirestoreSessions } from '../hooks/useFirestoreSessions';
 import { useFirestoreHandoffs } from '../hooks/useFirestoreHandoffs';
-import { sendMessage, startIntervention, closeIntervention } from '../services/api';
+import { sendMessage, sendMedia, startIntervention, closeIntervention } from '../services/api';
 import ChatList from './ChatList';
 import ChatWindow from './ChatWindow';
 
@@ -69,6 +69,17 @@ function Dashboard() {
     } catch (error) {
       console.error('❌ Error sending message:', error);
       alert(`Error al enviar mensaje: ${error.message}`);
+    }
+  };
+
+  // Handler: Send media
+  const handleSendMedia = async (sessionId, mediaType, mediaData, filename, mimeType, caption) => {
+    try {
+      await sendMedia(sessionId, mediaType, mediaData, filename, mimeType, caption);
+      console.log(`✅ ${mediaType} sent successfully`);
+    } catch (error) {
+      console.error('❌ Error sending media:', error);
+      alert(`Error al enviar ${mediaType}: ${error.message}`);
     }
   };
 
@@ -184,6 +195,7 @@ function Dashboard() {
             session={selectedSession}
             handoff={selectedHandoff}
             onSendMessage={handleSendMessage}
+            onSendMedia={handleSendMedia}
             onIntervene={handleIntervene}
             onCloseIntervention={handleCloseIntervention}
             onBackToList={handleBackToList}

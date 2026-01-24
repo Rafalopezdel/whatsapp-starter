@@ -85,3 +85,19 @@ export async function getSessionDetails(sessionId) {
 export async function healthCheck() {
   return fetchWithAuth('/dashboard/health');
 }
+
+/**
+ * Send media from the dashboard to a WhatsApp user
+ * @param {string} to - Phone number (e.g., "573001234567")
+ * @param {string} mediaType - Type of media: 'image', 'video', 'audio', 'document'
+ * @param {string} mediaData - Base64 encoded media data
+ * @param {string} filename - Original filename
+ * @param {string} mimeType - MIME type of the media
+ * @param {string} caption - Optional caption for the media
+ */
+export async function sendMedia(to, mediaType, mediaData, filename, mimeType, caption = null) {
+  return fetchWithAuth('/dashboard/send-media', {
+    method: 'POST',
+    body: JSON.stringify({ to, mediaType, mediaData, filename, mimeType, caption })
+  });
+}

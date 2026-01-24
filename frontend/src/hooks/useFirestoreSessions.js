@@ -38,11 +38,16 @@ export function useFirestoreSessions() {
             sessionId: conv.userId,
             phoneNumber: conv.userId,
             documentNumber: conv.userDocument || null,
-            // Map messages array to conversationHistory format
+            // Map messages array to conversationHistory format (with media support)
             conversationHistory: conv.messages.map(msg => ({
               role: msg.role,
               content: msg.text,
-              type: 'text'
+              type: msg.mediaUrl ? 'media' : 'text',
+              // Media fields
+              mediaUrl: msg.mediaUrl || null,
+              mediaType: msg.mediaType || null,
+              mimeType: msg.mimeType || null,
+              timestamp: msg.timestamp || null,
             })),
             lastUpdated: new Date(conv.timestamp),
             createdAt: new Date(conv.timestamp),

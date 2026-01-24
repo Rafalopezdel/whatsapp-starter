@@ -8,6 +8,64 @@ const client = new Anthropic({
   apiKey: process.env.CLAUDE_API_KEY,
 });
 
+/**
+ * Limpia el historial de conversación para eliminar tool_use huérfanos
+ * Claude requiere que cada tool_use tenga un tool_result inmediatamente después
+ * Si el handoff interrumpe el flujo, pueden quedar tool_use sin respuesta
+ */
+function cleanConversationHistory(history) {
+  if (!history || history.length === 0) return [];
+
+  const cleaned = [];
+
+  for (let i = 0; i < history.length; i++) {
+    const msg = history[i];
+
+    // Si es un mensaje con tool_use, verificar que el siguiente tenga tool_result
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const hasToolUse = msg.content.some(block => block.type === 'tool_use');
+
+      if (hasToolUse) {
+        // Verificar si el siguiente mensaje tiene tool_result
+        const nextMsg = history[i + 1];
+        const hasToolResult = nextMsg &&
+          nextMsg.role === 'user' &&
+          Array.isArray(nextMsg.content) &&
+          nextMsg.content.some(block => block.type === 'tool_result');
+
+        if (!hasToolResult) {
+          // Omitir este tool_use huérfano
+          console.log(`⚠️ Omitiendo tool_use huérfano en posición ${i}`);
+          continue;
+        }
+      }
+    }
+
+    // Si es un tool_result sin tool_use previo, omitirlo también
+    if (msg.role === 'user' && Array.isArray(msg.content)) {
+      const hasToolResult = msg.content.some(block => block.type === 'tool_result');
+
+      if (hasToolResult) {
+        const prevMsg = cleaned[cleaned.length - 1];
+        const prevHasToolUse = prevMsg &&
+          prevMsg.role === 'assistant' &&
+          Array.isArray(prevMsg.content) &&
+          prevMsg.content.some(block => block.type === 'tool_use');
+
+        if (!prevHasToolUse) {
+          // Omitir este tool_result huérfano
+          console.log(`⚠️ Omitiendo tool_result huérfano en posición ${i}`);
+          continue;
+        }
+      }
+    }
+
+    cleaned.push(msg);
+  }
+
+  return cleaned;
+}
+
 async function handleConversation(freeText, conversationHistory) {
   try {
     const currentDateContext = getCurrentColombiaDateTime();
@@ -45,6 +103,8 @@ FLUJO:
 1. MOSTRAR AL USUARIO: Usa EXACTAMENTE el número del día de fecha_legible. Si dice "Martes, 20 de enero" → muestra "Martes 20" al usuario.
 2. AGENDAR/MODIFICAR: Usa el fecha_raw correspondiente al slot. NUNCA calcules fechas.
 3. PROHIBIDO: Calcular fechas tú mismo. Si fecha_legible dice "20", muestra "20", no calcules "21".
+4. 🚨 VERIFICAR FECHA SOLICITADA: Si el usuario pide una fecha específica (ej: "15 de febrero"), DEBES llamar getAvailableTimeSlots con ESA fecha. NO uses slots previamente mostrados si el usuario pide una fecha diferente.
+5. Si el usuario pide una fecha que NO está en los slots ya mostrados → llama getAvailableTimeSlots(date="YYYY-MM-DD") con la fecha solicitada.
 Ejemplo: Slot {"fecha_raw":"2026-01-20","hora":"08:00","fecha_legible":"Martes, 20 de enero"}
 → Muestra al usuario: "Martes 20: 8am" (usa el 20 de fecha_legible)
 → Para agendar: usa date="2026-01-20" (fecha_raw)
@@ -66,7 +126,10 @@ TOOLS: findPatientByDocument, getAvailableTimeSlots, createAppointment (solo nue
 No saludo inicial. Despedida cálida.
 `;
 
-    const messages = conversationHistory.map(m => ({
+    // Limpiar historial para eliminar tool_use huérfanos (sin tool_result correspondiente)
+    const cleanedHistory = cleanConversationHistory(conversationHistory);
+
+    const messages = cleanedHistory.map(m => ({
       role: m.role,
       content: m.content
     }));
