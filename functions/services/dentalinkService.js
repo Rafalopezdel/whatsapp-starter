@@ -71,7 +71,11 @@ const validateDate = (specificDate, today) => {
     fourteenDaysFromNow.setDate(todayMidnight.getDate() + 14);
 
     if (specificDateMidnight >= fourteenDaysFromNow) {
-        return "Lo siento, solo puedo agendar citas dentro de los próximos 14 días. Si deseas agendar más allá de ese período, por favor comunícate al número de teléfono 3008592500.";
+        // Retornar objeto especial para indicar que se necesita handoff
+        return {
+            needsHandoff: true,
+            message: "Para agendar citas con más de 14 días de anticipación, te conectaré con un agente humano que podrá ayudarte mejor."
+        };
     }
 
     return null;

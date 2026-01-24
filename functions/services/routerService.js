@@ -435,9 +435,49 @@ async function routeByIntent({ from, freeText, session }) {
                 freeText: parameters.freeText
             });
 
-            if (!availableSlots || availableSlots.length === 0) {
+            // Verificar si se necesita handoff (fecha > 14 días)
+            if (availableSlots && availableSlots.needsHandoff) {
+                console.log(`🤝 Fecha solicitada > 14 días, iniciando handoff para ${from}`);
+
+                // Obtener nombre del cliente
+                const clientName = session.data?.userName || 'Cliente';
+                const agentPhoneNumber = await configService.getAgentPhoneNumber();
+
+                if (agentPhoneNumber) {
+                    // Crear handoff
+                    await handoffService.createHandoff(from, agentPhoneNumber, clientName);
+
+                    // Enviar mensaje al cliente
+                    await sendText(from, availableSlots.message);
+
+                    // Notificar al agente
+                    const dashboardUrl = `https://whatsapp-starter-4de11.web.app/?client=${from}`;
+                    await sendText(agentPhoneNumber,
+                        `🗓️ ${clientName} (${from}) quiere agendar una cita para más de 14 días.\n\n` +
+                        `📱 Dashboard: ${dashboardUrl}`
+                    );
+
+                    // Guardar en historial y terminar
+                    await conversationLogService.logSimpleMessage(from, 'assistant', availableSlots.message, session.data?.userDocument, clientName);
+
+                    // ⚠️ IMPORTANTE: Limpiar el contexto de la sesión para que Claude no espere más respuestas
+                    // Esto evita que al cerrar el handoff, Claude siga esperando fecha/hora
+                    session.availableSlots = null;
+                    session.history = []; // Limpiar historial para reiniciar contexto
+                    await setSession(from, {
+                        ...session,
+                        availableSlots: null,
+                        history: []
+                    });
+                    console.log(`🧹 Contexto de sesión limpiado para ${from} (handoff > 14 días)`);
+
+                    return; // Terminar el flujo aquí
+                } else {
+                    toolResult = "Lo siento, en este momento no puedo conectarte con un agente. Por favor intenta más tarde.";
+                }
+            } else if (!availableSlots || (Array.isArray(availableSlots) && availableSlots.length === 0)) {
                 toolResult = `No hay disponibilidad para la fecha ${parameters.date}.`;
-            } else {
+            } else if (Array.isArray(availableSlots)) {
                 const parsedDate = chrono.parseDate(parameters.freeText || '');
                 if (parsedDate) {
                     const requestedDate = parsedDate.toISOString().split('T')[0];
@@ -529,12 +569,65 @@ IMPORTANT:
         } else if (name === 'createAppointment') {
             let { date, time, documentNumber, reason } = parameters;
 
+            // Verificar si el usuario pidió una fecha diferente a la que Claude quiere agendar
+            const lastUserMessage = session.history
+                .filter(m => m.role === 'user' && typeof m.content === 'string')
+                .slice(-1)[0]?.content || freeText;
+
+            // Intentar parsear la fecha del mensaje del usuario
+            const userRequestedDate = chrono.parseDate(lastUserMessage, new Date(), { forwardDate: true });
+
+            if (userRequestedDate) {
+                const userDateStr = userRequestedDate.toISOString().split('T')[0];
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+
+                const fourteenDaysFromNow = new Date(today);
+                fourteenDaysFromNow.setDate(today.getDate() + 14);
+
+                // Si el usuario pidió una fecha > 14 días, activar handoff
+                if (userRequestedDate >= fourteenDaysFromNow) {
+                    console.log(`🤝 Usuario pidió fecha ${userDateStr} (> 14 días), activando handoff para ${from}`);
+
+                    const clientName = session.data?.userName || 'Cliente';
+                    const agentPhoneNumber = await configService.getAgentPhoneNumber();
+
+                    if (agentPhoneNumber) {
+                        await handoffService.createHandoff(from, agentPhoneNumber, clientName);
+
+                        const handoffMessage = "Para agendar citas con más de 14 días de anticipación, te conectaré con un agente humano que podrá ayudarte mejor.";
+                        await sendText(from, handoffMessage);
+
+                        const dashboardUrl = `https://whatsapp-starter-4de11.web.app/?client=${from}`;
+                        await sendText(agentPhoneNumber,
+                            `🗓️ ${clientName} (${from}) quiere agendar una cita para ${userDateStr} (más de 14 días).\n\n` +
+                            `📱 Dashboard: ${dashboardUrl}`
+                        );
+
+                        await conversationLogService.logSimpleMessage(from, 'assistant', handoffMessage, session.data?.userDocument, clientName);
+
+                        // ⚠️ IMPORTANTE: Limpiar el contexto de la sesión
+                        session.availableSlots = null;
+                        session.history = [];
+                        await setSession(from, {
+                            ...session,
+                            availableSlots: null,
+                            history: []
+                        });
+                        console.log(`🧹 Contexto de sesión limpiado para ${from} (handoff > 14 días)`);
+
+                        return;
+                    }
+                }
+
+                // Si la fecha del usuario es diferente a la que Claude quiere usar, advertir
+                if (userDateStr !== date) {
+                    console.log(`⚠️ Usuario pidió ${userDateStr} pero Claude quiere agendar ${date}`);
+                }
+            }
+
             // Corregir fecha usando slots disponibles
             if (session.availableSlots && session.availableSlots.length > 0) {
-                const lastUserMessage = session.history
-                    .filter(m => m.role === 'user' && typeof m.content === 'string')
-                    .slice(-1)[0]?.content || freeText;
-
                 const correctedDate = slotMatcher.correctDateFromSlots(date, time, session.availableSlots, lastUserMessage);
                 if (correctedDate !== date) {
                     console.log(`🔧 Corrección fecha (create): ${date} → ${correctedDate}`);

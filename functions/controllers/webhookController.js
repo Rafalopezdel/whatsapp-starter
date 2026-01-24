@@ -8,6 +8,7 @@ const handoffService = require('../services/handoffService');
 const assistantRouter = require('../services/assistantRouter');
 const conversationLogService = require('../services/conversationLogService');
 const reminderService = require('../services/reminderService');
+const mediaService = require('../services/mediaService');
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
@@ -95,6 +96,62 @@ exports.handleWebhook = async (req, res) => {
             if (buttonTitle?.includes('no podré') || buttonTitle?.includes('cancelar')) {
                 console.log(`❌ Procesando cancelación de cita para ${from}`);
                 await reminderService.processCancellation(from);
+                return;
+            }
+        }
+
+        // 📎 MANEJO DE MULTIMEDIA (imágenes, videos, audios, documentos, stickers)
+        const mediaTypes = ['image', 'video', 'audio', 'document', 'sticker'];
+        if (mediaTypes.includes(message.type)) {
+            console.log(`📎 [MEDIA] Mensaje de tipo ${message.type} recibido de ${from}`);
+
+            try {
+                const mediaObj = message[message.type];
+                const mediaId = mediaObj.id;
+                const mimeType = mediaObj.mime_type;
+                const caption = mediaObj.caption || null;
+
+                console.log(`📎 [MEDIA] mediaId: ${mediaId}, mimeType: ${mimeType}, caption: ${caption || 'ninguno'}`);
+
+                // Procesar y subir a Firebase Storage
+                const storageUrl = await mediaService.processIncomingMedia(mediaId, from, message.type, mimeType);
+
+                // Guardar en conversación con estructura extendida
+                await conversationLogService.logMediaMessage(from, 'user', {
+                    mediaUrl: storageUrl,
+                    mediaType: message.type,
+                    mimeType: mimeType,
+                    caption: caption
+                });
+
+                // Obtener número del agente para notificación
+                const agentPhoneNumber = await configService.getAgentPhoneNumber();
+
+                // Notificar al usuario y conectar con agente
+                await sendText(from, 'He recibido tu archivo. Te conecto con un agente para ayudarte mejor.');
+
+                // Verificar si ya tiene handoff activo
+                const existingHandoff = await handoffService.getActiveHandoffByClient(from);
+                if (!existingHandoff) {
+                    // Crear handoff
+                    await handoffService.createHandoff(from, agentPhoneNumber, 'Cliente');
+                }
+
+                // Notificar al agente
+                const mediaTypeLabel = {
+                    'image': 'imagen',
+                    'video': 'video',
+                    'audio': 'audio',
+                    'document': 'documento',
+                    'sticker': 'sticker'
+                };
+                await sendText(agentPhoneNumber, `📎 ${from} envió un ${mediaTypeLabel[message.type] || 'archivo'}. Revisa el dashboard.`);
+
+                console.log(`✅ [MEDIA] Procesamiento completo para ${from}`);
+                return;
+            } catch (mediaError) {
+                console.error(`❌ [MEDIA] Error procesando media:`, mediaError.message);
+                await sendText(from, 'Hubo un problema al recibir tu archivo. Por favor intenta de nuevo o escribe tu mensaje.');
                 return;
             }
         }

@@ -12,6 +12,7 @@ Un chatbot de WhatsApp listo para producción para clínicas dentales que integr
 - **Dashboard para Agentes**: Panel web para gestionar conversaciones e intervenciones
 - **Buffering Inteligente**: Maneja mensajes rápidos secuenciales con agrupación inteligente
 - **Recordatorios de Citas**: Envío automático de recordatorios vía WhatsApp un día antes de la cita con botones de confirmación/cancelación
+- **Soporte Multimedia**: Recepción y envío de imágenes, videos, audio y documentos vía WhatsApp
 
 ## Arquitectura
 
@@ -52,6 +53,11 @@ Un chatbot de WhatsApp listo para producción para clínicas dentales que integr
 │   │   ├── handoffService.js      # Sistema de transferencia a humano
 │   │   ├── reminderService.js     # Sistema de recordatorios de citas
 │   │   ├── whatsappTemplateService.js # Envío de templates WhatsApp
+│   │   ├── mediaService.js        # Manejo de multimedia (upload/download)
+│   │   └── ...
+│   ├── utils/                # Utilidades
+│   │   ├── audioConverter.js      # Conversión de audio con FFmpeg
+│   │   ├── dateHelper.js          # Utilidades de zona horaria Colombia
 │   │   └── ...
 │   ├── middleware/           # Middleware de Express
 │   └── utils/                # Utilidades
@@ -185,6 +191,26 @@ Los mensajes se agrupan por 10 segundos antes de procesar para manejar usuarios 
 ### Manejo de Zona Horaria
 Todas las operaciones de fecha/hora usan la zona horaria de Colombia (`America/Bogota`) para asegurar agendamiento correcto de citas y saludos apropiados sin importar la ubicación del servidor.
 
+### Soporte Multimedia
+El sistema maneja archivos multimedia de forma bidireccional:
+
+**Recepción de media del usuario:**
+- Imágenes, videos, notas de voz y documentos enviados por WhatsApp
+- Archivos descargados de WhatsApp API y almacenados en Firebase Storage
+- URLs permanentes generadas para visualización en dashboard
+- Conexión automática con agente humano al recibir multimedia
+
+**Envío de media desde el dashboard:**
+- El agente puede enviar imágenes seleccionando archivos
+- Grabación de notas de voz directamente desde el navegador
+- Conversión automática de audio (webm/m4a) a MP3 vía FFmpeg
+- Soporte para adjuntar documentos
+
+**Retención y limpieza:**
+- Archivos almacenados por 60 días
+- Limpieza automática diaria a las 3:00 AM (Colombia)
+- Estructura de almacenamiento: `media/{userId}/{timestamp}_{mediaId}.{ext}`
+
 ### Sistema de Recordatorios de Citas
 El sistema envía recordatorios automáticos vía WhatsApp a los pacientes un día antes de su cita:
 
@@ -201,6 +227,7 @@ El sistema envía recordatorios automáticos vía WhatsApp a los pacientes un d�
 | `cleanupSessions` | Cada hora | Elimina sesiones expiradas (>30 min) |
 | `generateDailyReminders` | 6:00 AM Colombia | Genera recordatorios para citas del día siguiente |
 | `sendScheduledReminders` | 8:00 AM Colombia | Envía templates de WhatsApp a recordatorios pendientes |
+| `cleanupOldMedia` | 3:00 AM Colombia | Elimina archivos multimedia con más de 60 días |
 
 ## Documentación
 
