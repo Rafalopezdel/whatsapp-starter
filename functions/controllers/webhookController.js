@@ -58,20 +58,63 @@ exports.handleWebhook = async (req, res) => {
             console.log(`🔍 [DEBUG] Button payload: "${message.button?.payload}"`);
         }
 
-        // 🔔 MANEJO DE RESPUESTAS DE BOTONES DE TEMPLATES (Recordatorios de citas)
+        // 🔔 MANEJO DE RESPUESTAS DE BOTONES DE TEMPLATES
         // Los botones de templates vienen como type="button" con button.payload
+        // ⚠️ IMPORTANTE: El orden de detección importa. Los más específicos primero.
         if (message.type === 'button' && message.button?.payload) {
             const buttonPayload = message.button.payload.toLowerCase().trim();
             console.log(`🔘 Respuesta de botón de template: "${buttonPayload}" de ${from}`);
 
-            // Detectar confirmación
-            if (buttonPayload.includes('confirmo') || buttonPayload.includes('sí')) {
+            // 1. Template doctor_message - Aceptar (contiene "disponible")
+            if (buttonPayload.includes('disponible')) {
+                console.log(`✅ Cliente ${from} aceptó comunicación con el doctor`);
+
+                // Guardar respuesta del usuario primero (el texto real del botón)
+                const userButtonText = message.button?.text || 'Sí, disponible';
+                await conversationLogService.logSimpleMessage(from, 'user', userButtonText, null, null);
+
+                // Abrir handoff automáticamente
+                const agentPhoneNumber = await configService.getAgentPhoneNumber();
+                const existingHandoff = await handoffService.getActiveHandoffByClient(from);
+
+                if (!existingHandoff) {
+                    await handoffService.createHandoff(from, agentPhoneNumber, 'Cliente');
+
+                    const confirmMessage = '👤 Perfecto, el Dr. Camilo se comunicará contigo en breve.';
+                    await sendText(from, confirmMessage);
+
+                    // Guardar mensaje del bot
+                    await conversationLogService.logSimpleMessage(from, 'assistant', confirmMessage, null, null);
+
+                    // Notificar al agente que el cliente respondió
+                    await sendText(agentPhoneNumber, `✅ ${from} está disponible para hablar. Revisa el dashboard para responder.`);
+                }
+
+                return;
+            }
+
+            // 2. Template doctor_message - Rechazar (contiene "ahora no" o "no puedo")
+            if (buttonPayload.includes('ahora no') || buttonPayload.includes('no puedo')) {
+                console.log(`⏳ Cliente ${from} no está disponible ahora`);
+
+                // Guardar respuesta del usuario (el texto real del botón)
+                const userButtonText = message.button?.text || 'Ahora no puedo';
+                await conversationLogService.logSimpleMessage(from, 'user', userButtonText, null, null);
+
+                const agentPhoneNumber = await configService.getAgentPhoneNumber();
+                await sendText(agentPhoneNumber, `⏳ ${from} respondió "Ahora no puedo". Intenta más tarde.`);
+
+                return;
+            }
+
+            // 3. Template recordatorio citas - Confirmar (contiene "confirmo")
+            if (buttonPayload.includes('confirmo')) {
                 console.log(`✅ Procesando confirmación de cita para ${from}`);
                 await reminderService.processConfirmation(from);
                 return;
             }
 
-            // Detectar cancelación
+            // 4. Template recordatorio citas - Cancelar (contiene "no podré" o "cancelar")
             if (buttonPayload.includes('no podré') || buttonPayload.includes('no podre') || buttonPayload.includes('cancelar')) {
                 console.log(`❌ Procesando cancelación de cita para ${from}`);
                 await reminderService.processCancellation(from);
@@ -128,7 +171,11 @@ exports.handleWebhook = async (req, res) => {
                 const agentPhoneNumber = await configService.getAgentPhoneNumber();
 
                 // Notificar al usuario y conectar con agente
-                await sendText(from, 'He recibido tu archivo. Te conecto con un agente para ayudarte mejor.');
+                const mediaAckMessage = 'He recibido tu archivo. Te conecto con un agente para ayudarte mejor.';
+                await sendText(from, mediaAckMessage);
+
+                // Guardar respuesta del bot
+                await conversationLogService.logSimpleMessage(from, 'assistant', mediaAckMessage, null, null);
 
                 // Verificar si ya tiene handoff activo
                 const existingHandoff = await handoffService.getActiveHandoffByClient(from);

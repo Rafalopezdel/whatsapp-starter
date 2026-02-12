@@ -101,6 +101,19 @@ deploy-*.ps1
 /package.json
 /package-lock.json
 
+# Firebase service account keys (NEVER commit)
+functions/serviceAccountKey.json
+**/serviceAccountKey*.json
+
+# WhatsApp backup data (private patient data)
+respaldo_whatsapp_61/
+respaldo_whatsapp_*/
+
+# Data migration/utility scripts
+import-whatsapp-backup.js
+sync-documents-from-dentalink.js
+update-backup-userids.js
+
 # Temporary files
 *.tmp
 *.temp

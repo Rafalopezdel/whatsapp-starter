@@ -71,9 +71,19 @@ async function logConversation(userId, sessionHistory, userDocument = null, user
       // (mensaje del usuario + respuesta del bot de esta interacción)
       const lastTwo = newTextMessages.slice(-2);
 
-      console.log(`📥 [CONVLOG] Existentes: ${existingMessages.length}, Agregando: ${lastTwo.length}`);
+      // Agregar timestamp a cada mensaje
+      const now = new Date().toISOString();
+      const lastTwoWithTimestamp = lastTwo.map(m => ({ ...m, timestamp: now }));
 
-      conversationData.messages = [...existingMessages, ...lastTwo];
+      console.log(`📥 [CONVLOG] Existentes: ${existingMessages.length}, Agregando: ${lastTwoWithTimestamp.length}`);
+
+      conversationData.messages = [...existingMessages, ...lastTwoWithTimestamp];
+
+      // Actualizar lastUserMessage si hay mensaje del usuario
+      const userMsgs = lastTwo.filter(m => m.role === 'user');
+      if (userMsgs.length > 0) {
+        conversationData.lastUserMessage = now;
+      }
 
       // Actualizar datos del usuario si se proporcionan
       if (userDocument !== null) conversationData.userDocument = userDocument;
@@ -93,26 +103,33 @@ async function logConversation(userId, sessionHistory, userDocument = null, user
 async function logSimpleMessage(userId, role, text, userDocument = null, userName = null) {
   try {
     const docRef = db.collection(COLLECTION_NAME).doc(userId);
+    const messageTimestamp = new Date().toISOString();
 
     await db.runTransaction(async (transaction) => {
       const doc = await transaction.get(docRef);
 
       let conversationData;
+      const newMessage = { role, text, timestamp: messageTimestamp };
 
       if (doc.exists) {
         const data = doc.data();
         conversationData = {
           ...data,
-          messages: [...(data.messages || []), { role, text }],
+          messages: [...(data.messages || []), newMessage],
           timestamp: admin.firestore.FieldValue.serverTimestamp()
         };
+        // Actualizar lastUserMessage si es mensaje del usuario
+        if (role === 'user') {
+          conversationData.lastUserMessage = messageTimestamp;
+        }
       } else {
         conversationData = {
           userId,
           userDocument,
           userName,
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
-          messages: [{ role, text }]
+          messages: [newMessage],
+          lastUserMessage: role === 'user' ? messageTimestamp : null
         };
       }
 
@@ -191,13 +208,14 @@ async function deleteConversation(userId) {
 async function logMediaMessage(userId, role, mediaData, userDocument = null, userName = null) {
   try {
     // mediaData: { mediaUrl, mediaType, mimeType, caption }
+    const messageTimestamp = new Date().toISOString();
     const message = {
       role: role,
       text: mediaData.caption || `[${mediaData.mediaType}]`,
       mediaUrl: mediaData.mediaUrl,
       mediaType: mediaData.mediaType,
       mimeType: mediaData.mimeType,
-      timestamp: new Date().toISOString()
+      timestamp: messageTimestamp
     };
 
     const docRef = db.collection(COLLECTION_NAME).doc(userId);
@@ -214,13 +232,18 @@ async function logMediaMessage(userId, role, mediaData, userDocument = null, use
           messages: [...(data.messages || []), message],
           timestamp: admin.firestore.FieldValue.serverTimestamp()
         };
+        // Actualizar lastUserMessage si es mensaje del usuario
+        if (role === 'user') {
+          conversationData.lastUserMessage = messageTimestamp;
+        }
       } else {
         conversationData = {
           userId,
           userDocument,
           userName,
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
-          messages: [message]
+          messages: [message],
+          lastUserMessage: role === 'user' ? messageTimestamp : null
         };
       }
 
@@ -259,6 +282,74 @@ async function getConversation(userId) {
   }
 }
 
+// Verifica si la ventana de 24h de WhatsApp está abierta para un usuario
+async function isConversationWindowOpen(userId) {
+  try {
+    const docRef = db.collection(COLLECTION_NAME).doc(userId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return { isOpen: false, reason: 'No hay historial de conversación' };
+    }
+
+    const data = doc.data();
+    const lastUserMessage = data.lastUserMessage;
+
+    if (!lastUserMessage) {
+      // Buscar en mensajes si no hay lastUserMessage guardado
+      const messages = data.messages || [];
+      const userMessages = messages.filter(m => m.role === 'user' && m.timestamp);
+
+      if (userMessages.length === 0) {
+        return { isOpen: false, reason: 'El cliente no ha enviado mensajes' };
+      }
+
+      // Obtener el último mensaje del usuario
+      const lastMsg = userMessages[userMessages.length - 1];
+      const lastMsgTime = new Date(lastMsg.timestamp);
+      const now = new Date();
+      const hoursDiff = (now - lastMsgTime) / (1000 * 60 * 60);
+
+      if (hoursDiff > 24) {
+        return {
+          isOpen: false,
+          reason: `Han pasado ${Math.floor(hoursDiff)} horas desde el último mensaje del cliente`,
+          lastMessage: lastMsg.timestamp
+        };
+      }
+
+      return {
+        isOpen: true,
+        hoursRemaining: Math.floor(24 - hoursDiff),
+        lastMessage: lastMsg.timestamp
+      };
+    }
+
+    // Usar lastUserMessage guardado
+    const lastMsgTime = new Date(lastUserMessage);
+    const now = new Date();
+    const hoursDiff = (now - lastMsgTime) / (1000 * 60 * 60);
+
+    if (hoursDiff > 24) {
+      return {
+        isOpen: false,
+        reason: `Han pasado ${Math.floor(hoursDiff)} horas desde el último mensaje del cliente`,
+        lastMessage: lastUserMessage
+      };
+    }
+
+    return {
+      isOpen: true,
+      hoursRemaining: Math.floor(24 - hoursDiff),
+      lastMessage: lastUserMessage
+    };
+
+  } catch (error) {
+    console.error('❌ Error en isConversationWindowOpen:', error);
+    return { isOpen: false, reason: 'Error verificando ventana de conversación' };
+  }
+}
+
 module.exports = {
   logConversation,
   logSimpleMessage,
@@ -267,4 +358,5 @@ module.exports = {
   getUserData,
   deleteConversation,
   getConversation,
+  isConversationWindowOpen,
 };

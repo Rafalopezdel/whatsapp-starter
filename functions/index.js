@@ -455,6 +455,9 @@ app.post("/dashboard/intervene", authenticateDashboard, dashboardController.star
 // Cerrar intervención (handoff)
 app.post("/dashboard/close-intervention", authenticateDashboard, dashboardController.closeIntervention);
 
+// Iniciar conversación con template (fuera de ventana 24h)
+app.post("/dashboard/start-conversation", authenticateDashboard, dashboardController.startConversation);
+
 // Exportar la función HTTP de Firebase (Gen 2)
 // La URL será: https://<region>-<project-id>.cloudfunctions.net/api
 exports.api = onRequest({

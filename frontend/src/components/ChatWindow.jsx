@@ -8,7 +8,7 @@ import MessageBubble from './MessageBubble';
  * ChatWindow Component
  * Displays the full conversation for a selected session
  */
-export default function ChatWindow({ session, handoff, onSendMessage, onSendMedia, onIntervene, onCloseIntervention, onBackToList, showBackButton }) {
+export default function ChatWindow({ session, handoff, onSendMessage, onSendMedia, onIntervene, onCloseIntervention, onStartConversation, onBackToList, showBackButton }) {
   const messagesEndRef = useRef(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -52,6 +52,7 @@ export default function ChatWindow({ session, handoff, onSendMessage, onSendMedi
         hasActiveHandoff={hasActiveHandoff}
         onIntervene={onIntervene}
         onCloseIntervention={onCloseIntervention}
+        onStartConversation={onStartConversation}
         onBackToList={onBackToList}
         showBackButton={showBackButton}
       />
@@ -103,7 +104,7 @@ export default function ChatWindow({ session, handoff, onSendMessage, onSendMedi
  * ChatWindowHeader Component
  * Header showing user info and intervention controls
  */
-function ChatWindowHeader({ userName, userDocument, phoneNumber, status, hasActiveHandoff, onIntervene, onCloseIntervention, onBackToList, showBackButton }) {
+function ChatWindowHeader({ userName, userDocument, phoneNumber, status, hasActiveHandoff, onIntervene, onCloseIntervention, onStartConversation, onBackToList, showBackButton }) {
   return (
     <div className="bg-white border-b border-gray-200 px-2 xs:px-3 md:px-4 py-2 xs:py-3 flex-shrink-0">
       <div className="flex items-center justify-between gap-1 xs:gap-2">
@@ -146,6 +147,22 @@ function ChatWindowHeader({ userName, userDocument, phoneNumber, status, hasActi
           <div className="hidden md:block">
             <StatusIndicator status={status} size="normal" showLabel={true} />
           </div>
+
+          {/* Start conversation button (send template) - only show when no active handoff */}
+          {!hasActiveHandoff && (
+            <button
+              onClick={onStartConversation}
+              className="p-1.5 xs:px-2 xs:py-1.5 md:px-4 md:py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-xs md:text-sm font-medium whitespace-nowrap"
+              title="Enviar mensaje para iniciar conversación"
+            >
+              {/* Icono en pantallas muy pequeñas */}
+              <svg className="w-4 h-4 xs:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              <span className="hidden xs:inline sm:hidden">Contactar</span>
+              <span className="hidden sm:inline">Iniciar Chat</span>
+            </button>
+          )}
 
           {/* Intervention button */}
           {hasActiveHandoff ? (

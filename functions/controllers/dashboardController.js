@@ -2,6 +2,7 @@ const { getActiveSessions, getSessionById } = require('../services/dashboardServ
 const { createHandoff, closeHandoff, getActiveHandoffByClient } = require('../services/handoffService');
 const { getAgentPhoneNumber } = require('../services/configService');
 const whatsappService = require('../services/whatsappService');
+const whatsappTemplateService = require('../services/whatsappTemplateService');
 const conversationLogService = require('../services/conversationLogService');
 const mediaService = require('../services/mediaService');
 const { convertWebmToOgg } = require('../utils/audioConverter');
@@ -143,6 +144,22 @@ async function startIntervention(req, res) {
 
     console.log(`🤝 Dashboard: Starting intervention for ${clientId}...`);
 
+    // Verificar si la ventana de 24h está abierta
+    const windowStatus = await conversationLogService.isConversationWindowOpen(clientId);
+
+    if (!windowStatus.isOpen) {
+      console.log(`⚠️ Dashboard: Ventana de 24h cerrada para ${clientId}: ${windowStatus.reason}`);
+      return res.status(400).json({
+        success: false,
+        error: 'La ventana de 24 horas está cerrada',
+        reason: windowStatus.reason,
+        suggestion: 'Usa "Iniciar chat" para enviar la plantilla primero y espera la respuesta del cliente.',
+        windowClosed: true
+      });
+    }
+
+    console.log(`✅ Dashboard: Ventana de 24h abierta (${windowStatus.hoursRemaining}h restantes)`);
+
     // Check if there's already an active handoff
     const existingHandoff = await getActiveHandoffByClient(clientId);
     if (existingHandoff) {
@@ -172,15 +189,23 @@ async function startIntervention(req, res) {
     console.log(`✅ Dashboard: Intervention started for ${clientId}`);
 
     // Send notification to client that agent is now handling the chat
-    await whatsappService.sendMessage(
+    const agentJoinedMessage = '👤 Un agente se ha unido a la conversación y te atenderá personalmente.';
+    await whatsappService.sendMessage(clientId, agentJoinedMessage);
+
+    // Log the message to conversation
+    await conversationLogService.logSimpleMessage(
       clientId,
-      '👤 Un agente se ha unido a la conversación y te atenderá personalmente.'
+      'assistant',
+      agentJoinedMessage,
+      null,
+      clientName
     );
 
     return res.status(200).json({
       success: true,
       message: 'Intervención iniciada correctamente',
       handoff: handoff,
+      hoursRemaining: windowStatus.hoursRemaining,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -227,9 +252,16 @@ async function closeIntervention(req, res) {
     console.log(`✅ Dashboard: Intervention closed for ${clientId}`);
 
     // Send notification to client that bot is back
-    await whatsappService.sendMessage(
+    const botBackMessage = '🤖 Paola ha vuelto a atenderte. ¿En qué más puedo ayudarte?';
+    await whatsappService.sendMessage(clientId, botBackMessage);
+
+    // Log the bot message to conversation
+    await conversationLogService.logSimpleMessage(
       clientId,
-      '🤖 Paola ha vuelto a atenderte. ¿En qué más puedo ayudarte?'
+      'assistant',
+      botBackMessage,
+      null,
+      null
     );
 
     return res.status(200).json({
@@ -443,6 +475,66 @@ async function sendMediaFromDashboard(req, res) {
   }
 }
 
+/**
+ * POST /api/dashboard/start-conversation
+ * Sends doctor_message template to initiate conversation with a client
+ * This is used when the 24h window is closed and agent needs to contact client
+ * Body: { clientId: "573001234567", clientName: "Juan Pérez" }
+ */
+async function startConversation(req, res) {
+  try {
+    const { clientId, clientName } = req.body;
+
+    if (!clientId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Se requiere el campo "clientId"'
+      });
+    }
+
+    console.log(`📨 Dashboard: Enviando template doctor_message a ${clientId}...`);
+
+    // Send the doctor_message template
+    const result = await whatsappTemplateService.sendDoctorMessage(
+      clientId,
+      clientName || 'Estimado paciente'
+    );
+
+    if (!result.success) {
+      console.error(`❌ Dashboard: Error enviando template: ${result.error}`);
+      return res.status(500).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    // Log the template message to conversation
+    await conversationLogService.logSimpleMessage(
+      clientId,
+      'agent',
+      `[Template enviado: El Dr. Camilo desea comunicarse contigo]`,
+      null,
+      clientName
+    );
+
+    console.log(`✅ Dashboard: Template enviado a ${clientId}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Mensaje de contacto enviado. El cliente debe responder para abrir la conversación.',
+      messageId: result.messageId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Dashboard: Error en startConversation:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al enviar mensaje de contacto',
+      details: error.message
+    });
+  }
+}
+
 module.exports = {
   getActiveChatSessions,
   getSessionDetails,
@@ -450,5 +542,6 @@ module.exports = {
   sendMediaFromDashboard,
   startIntervention,
   closeIntervention,
+  startConversation,
   healthCheck
 };

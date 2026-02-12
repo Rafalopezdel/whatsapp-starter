@@ -22,8 +22,12 @@ async function fetchWithAuth(endpoint, options = {}) {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+
+    // Create error with additional data for special handling
+    const error = new Error(errorData.error || `HTTP ${response.status}`);
+    error.data = errorData;
+    throw error;
   }
 
   return response.json();
@@ -99,5 +103,18 @@ export async function sendMedia(to, mediaType, mediaData, filename, mimeType, ca
   return fetchWithAuth('/dashboard/send-media', {
     method: 'POST',
     body: JSON.stringify({ to, mediaType, mediaData, filename, mimeType, caption })
+  });
+}
+
+/**
+ * Start a conversation with a client by sending the doctor_message template
+ * Used when the 24h window is closed and agent needs to initiate contact
+ * @param {string} clientId - Client phone number
+ * @param {string} clientName - Client name (optional)
+ */
+export async function startConversation(clientId, clientName = 'Estimado paciente') {
+  return fetchWithAuth('/dashboard/start-conversation', {
+    method: 'POST',
+    body: JSON.stringify({ clientId, clientName })
   });
 }

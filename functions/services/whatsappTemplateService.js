@@ -132,8 +132,73 @@ async function sendCancellationAcknowledgment(patientPhone) {
   }
 }
 
+/**
+ * Envía un template para que el doctor inicie conversación con un cliente
+ * @param {string} patientPhone - Número del paciente (ej: "573001234567")
+ * @param {string} patientName - Nombre del paciente
+ * @returns {Promise<{success: boolean, messageId?: string, error?: string}>}
+ */
+async function sendDoctorMessage(patientPhone, patientName) {
+  try {
+    console.log(`📤 Enviando template doctor_message a ${patientPhone}`);
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: patientPhone,
+      type: 'template',
+      template: {
+        name: 'doctor_message',
+        language: { code: 'es' },
+        components: [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: patientName }  // {{1}} nombre
+            ]
+          }
+        ]
+      }
+    };
+
+    const response = await api.post('/messages', payload);
+    const messageId = response.data?.messages?.[0]?.id;
+
+    console.log(`✅ Template doctor_message enviado a ${patientPhone}, messageId: ${messageId}`);
+
+    return {
+      success: true,
+      messageId: messageId
+    };
+
+  } catch (error) {
+    console.error(`❌ Error enviando doctor_message a ${patientPhone}:`);
+    console.error(`   Status: ${error?.response?.status}`);
+    console.error(`   Error: ${JSON.stringify(error?.response?.data || error.message)}`);
+
+    const waError = error?.response?.data?.error;
+    let errorMessage = error.message;
+
+    if (waError) {
+      errorMessage = waError.message || waError.error_data?.details || error.message;
+
+      if (waError.code === 132000) {
+        errorMessage = 'Template "doctor_message" no encontrado. Verifique que esté aprobado en Meta Business Manager.';
+      }
+      if (waError.code === 131026) {
+        errorMessage = `El número ${patientPhone} no está registrado en WhatsApp o no es válido.`;
+      }
+    }
+
+    return {
+      success: false,
+      error: errorMessage
+    };
+  }
+}
+
 module.exports = {
   sendAppointmentReminder,
   sendConfirmationSuccess,
-  sendCancellationAcknowledgment
+  sendCancellationAcknowledgment,
+  sendDoctorMessage
 };

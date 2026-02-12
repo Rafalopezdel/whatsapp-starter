@@ -3,7 +3,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
 import { useFirestoreSessions } from '../hooks/useFirestoreSessions';
 import { useFirestoreHandoffs } from '../hooks/useFirestoreHandoffs';
-import { sendMessage, sendMedia, startIntervention, closeIntervention } from '../services/api';
+import { sendMessage, sendMedia, startIntervention, closeIntervention, startConversation } from '../services/api';
 import ChatList from './ChatList';
 import ChatWindow from './ChatWindow';
 
@@ -89,11 +89,26 @@ function Dashboard() {
 
     try {
       const clientName = selectedSession.data?.userName || 'Cliente';
-      await startIntervention(selectedSession.sessionId, clientName);
+      const result = await startIntervention(selectedSession.sessionId, clientName);
       console.log('✅ Intervention started');
+
+      // Show remaining hours if available
+      if (result.hoursRemaining) {
+        console.log(`⏰ Ventana abierta por ${result.hoursRemaining}h más`);
+      }
     } catch (error) {
       console.error('❌ Error starting intervention:', error);
-      alert(`Error al iniciar intervención: ${error.message}`);
+
+      // Check if it's a window closed error
+      if (error.data?.windowClosed) {
+        alert(
+          `⚠️ ${error.message}\n\n` +
+          `${error.data.reason}\n\n` +
+          `💡 ${error.data.suggestion}`
+        );
+      } else {
+        alert(`Error al iniciar intervención: ${error.message}`);
+      }
     }
   };
 
@@ -107,6 +122,21 @@ function Dashboard() {
     } catch (error) {
       console.error('❌ Error closing intervention:', error);
       alert(`Error al cerrar intervención: ${error.message}`);
+    }
+  };
+
+  // Handler: Start conversation (send template when 24h window is closed)
+  const handleStartConversation = async () => {
+    if (!selectedSession) return;
+
+    try {
+      const clientName = selectedSession.data?.userName || 'Estimado paciente';
+      await startConversation(selectedSession.sessionId, clientName);
+      console.log('✅ Template sent successfully');
+      alert('Mensaje enviado. El cliente debe responder para abrir la conversación.');
+    } catch (error) {
+      console.error('❌ Error sending template:', error);
+      alert(`Error al enviar mensaje: ${error.message}`);
     }
   };
 
@@ -198,6 +228,7 @@ function Dashboard() {
             onSendMedia={handleSendMedia}
             onIntervene={handleIntervene}
             onCloseIntervention={handleCloseIntervention}
+            onStartConversation={handleStartConversation}
             onBackToList={handleBackToList}
             showBackButton={true}
           />
